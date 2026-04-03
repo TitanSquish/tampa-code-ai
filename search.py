@@ -46,3 +46,23 @@ def search(query: str, k: int = 3):
             results.append(chunks[idx])
 
     return results
+
+
+def search_with_distances(query: str, k: int = 3):
+    """Same as search but also returns squared L2 distances (lower is more similar)."""
+    query_embedding = np.array(
+        [get_embedding_cached(query)],
+        dtype="float32"
+    )
+
+    distances, indices = index.search(query_embedding, k)
+
+    results = []
+    dist_list = []
+
+    for d, idx in zip(distances[0], indices[0]):
+        if 0 <= idx < len(chunks):
+            results.append(chunks[idx])
+            dist_list.append(float(d))
+
+    return results, dist_list

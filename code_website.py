@@ -1,9 +1,11 @@
 from flask import Flask, request, render_template_string, redirect, url_for, session, Response, jsonify, send_file
-from search import search
+from search import search, search_with_distances
+from tampa_gis import get_tampa_property_context, suggest_tampa_addresses
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
+import re
 
 load_dotenv()
 
@@ -13,37 +15,165 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 LOGIN_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "test123")
 
+# Squared L2 distance from FAISS; tune via env if needed (lower = closer match).
+ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
 
-def build_prompt(question: str):
-    results = search(question, k=5)
 
+def build_address_query(
+    permit_type: str,
+    project_description: str,
+    zoning: str,
+    overlays=None,
+) -> str:
+    """
+    Build a semantic search query from permit type and project description.
+    Expands known keywords into zoning / land-use search terms.
+    """
+    parts = []
+    text = f"{permit_type} {project_description}".lower()
+    z = (zoning or "").strip()
+    if not z:
+        z = "Tampa zoning district"
+
+    keyword_expansions = [
+        (("duplex", "two-family", "two family"), "duplex two-family residential"),
+        (("single family", "single-family", "sfd", "detached"), "single-family residential detached dwelling"),
+        (("multifamily", "multi-family", "apartment"), "multifamily residential"),
+        (("parking", "stall", "spaces"), "parking spaces vehicle"),
+        (("setback", "yard", "build line"), "setbacks yards lot lines"),
+        (("height", "stories", "story"), "building height stories"),
+        (("lot width", "lot area", "lot size"), "lot area lot width dimensional standards"),
+        (("accessory", "adu", "garage"), "accessory structure"),
+        (("flood", "floodplain"), "floodplain elevation"),
+        (("overlay", "historic"), "overlay district"),
+    ]
+
+    for keywords, expansion in keyword_expansions:
+        if any(kw in text for kw in keywords):
+            parts.append(expansion)
+
+    if permit_type.strip():
+        parts.append(permit_type.strip())
+
+    # Base zoning / code vocabulary for strong retrieval
+    base = (
+        f"{z} zoning district dimensional standards "
+        "minimum lot area lot width front side rear setback maximum height "
+        "land development code Tampa"
+    )
+    parts.append(base)
+
+    if project_description.strip():
+        parts.append(project_description.strip())
+
+    if overlays:
+        for o in overlays:
+            o = (o or "").strip()
+            if o:
+                parts.append(o)
+
+    # De-duplicate while preserving order
+    seen = set()
+    merged = []
+    for p in parts:
+        p = p.strip()
+        if p and p not in seen:
+            seen.add(p)
+            merged.append(p)
+
+    return " ".join(merged)
+
+
+def _format_context(results: list) -> str:
     context_blocks = []
     for r in results:
-        context_blocks.append(
-            f"[Page {r['page']} | {r['chunk_id']}]\n{r['text']}"
-        )
+        context_blocks.append(f"[Page {r['page']} | {r['chunk_id']}]\n{r['text']}")
+    return "\n\n".join(context_blocks)
 
-    context = "\n\n".join(context_blocks)
 
-    prompt = f"""
-You are assisting a permit reviewer who is testing an AI city code search tool.
+def build_prompt(search_query: str, display_question: str):
+    results = search(search_query, k=10)
+    prompt = _compose_prompt(display_question, results, mode="ask")
+    return prompt, results
 
-Use ONLY the provided code excerpts.
-If the answer is not clearly supported, say: "I could not confirm that from the indexed code excerpts."
-Do not make legal conclusions.
-Be concise and practical.
-Always cite the page numbers used.
 
-If the user asks for a checklist, requirements, submittals, inspections, or plan review items,
-extract the items from the context and format them as bullet points instead of summarizing.
+def _compose_prompt(display_question: str, results: list, mode: str) -> str:
+    context = _format_context(results)
+    if mode == "address":
+        return f"""You are a zoning and land use reviewer.
 
-Question:
-{question}
+Extract ONLY explicit code requirements.
+
+Return in this format:
+
+- Requirement name: value (page X)
+- Requirement name: value (page X)
+
+If something is not found, say:
+"I could not confirm that from the indexed code excerpts."
+
+DO NOT summarize.
+DO NOT explain.
+ONLY extract requirements.
+
+Use ONLY the provided code excerpts below. If a requirement is not clearly stated in the excerpts, use the not-found line above for that item.
+
+Task:
+{display_question}
 
 Context:
 {context}
 """
-    return prompt, results
+    return f"""
+You are assisting a permit reviewer.
+
+Use ONLY the provided code excerpts.
+If the answer is not clearly supported, say: "I could not confirm that from the indexed code excerpts."
+Be concise and practical.
+Always cite page numbers used.
+
+Question:
+{display_question}
+
+Context:
+{context}
+"""
+
+
+def build_address_prompt(search_query: str, display_question: str):
+    """
+    RAG prompt for address review with relevance check on the best FAISS hit.
+    Returns (prompt, results) or (None, None) with failure reason for callers.
+    """
+    results, distances = search_with_distances(search_query, k=10)
+    if not results or not distances:
+        return None, None, "Unable to find relevant code sections for this request."
+    if distances[0] > ADDRESS_SEARCH_MAX_DISTANCE:
+        return None, None, "Unable to find relevant code sections for this request."
+    prompt = _compose_prompt(display_question, results, mode="address")
+    return prompt, results, None
+
+
+_REQ_LINE = re.compile(
+    r"^\s*-\s*(?P<name>.+?):\s*(?P<value>.+?)\s*\(\s*page\s+(?P<page>\d+)\s*\)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def parse_requirements(raw_text: str) -> list:
+    """Parse '- Name: value (page N)' lines into structured requirements."""
+    out = []
+    for m in _REQ_LINE.finditer(raw_text or ""):
+        try:
+            page = int(m.group("page"))
+        except ValueError:
+            continue
+        out.append({
+            "name": m.group("name").strip(),
+            "value": m.group("value").strip(),
+            "page": page,
+        })
+    return out
 
 
 LOGIN_HTML = """
@@ -338,12 +468,68 @@ HTML = """
     .hidden {
       display: none;
     }
+    .autocomplete-wrap {
+      position: relative;
+    }
+    .address-suggestions {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      background: white;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      max-height: 240px;
+      overflow-y: auto;
+      z-index: 30;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .address-suggestions li {
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 15px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .address-suggestions li:last-child { border-bottom: none; }
+    .address-suggestions li:hover,
+    .address-suggestions li.active {
+      background: #eff6ff;
+    }
+    .property-context-card {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .property-context-card.error {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .property-context-card strong { color: #0f172a; }
+    #addressForm input[type="text"] {
+      width: 100%;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      font-size: 16px;
+      box-sizing: border-box;
+      margin-top: 8px;
+    }
+    #addressForm label { display: block; margin-top: 12px; }
+    #addressForm label:first-of-type { margin-top: 0; }
   </style>
 </head>
 <body>
   <div class="tabs">
     <button type="button" class="tab active" data-tab="search">Search</button>
     <button type="button" class="tab" data-tab="pdf">Tampa Code PDF</button>
+    <button type="button" class="tab" data-tab="address">Address Review</button>
   </div>
 
   <div id="tab-search" class="tab-content active">
@@ -396,7 +582,50 @@ HTML = """
     </div>
   </div>
   </div>
+  <div id="tab-address" class="tab-content">
+    <div class="main-panel">
+    <div class="wrap">
 
+      <div class="card">
+        <h2>Address-Based Code Review</h2>
+
+        <form id="addressForm">
+          <label for="address"><strong>Property Address</strong></label>
+          <div class="autocomplete-wrap">
+            <input id="address" type="text" autocomplete="off" placeholder="Start typing a Tampa address…" />
+            <ul id="addressSuggestions" class="address-suggestions hidden" role="listbox"></ul>
+          </div>
+          <input type="hidden" id="propX" />
+          <input type="hidden" id="propY" />
+          <input type="hidden" id="propMagicKey" />
+
+          <div id="propertyContextCard" class="property-context-card hidden"></div>
+
+          <label for="permitType"><strong>Permit Type</strong></label>
+          <input id="permitType" type="text" placeholder="Single-family, duplex, site plan..." />
+
+          <label for="projectDesc"><strong>Project Description</strong></label>
+          <textarea id="projectDesc" placeholder="Example: setbacks and building height"></textarea>
+
+          <button id="addressSubmitBtn" type="submit" disabled>Get Requirements</button>
+        </form>
+        <p class="muted" style="margin-top:10px;">Zoning and overlays load from City of Tampa GIS — not from the AI. You must select an address and load property context before running a review.</p>
+      </div>
+
+      <div id="addressResultCard" class="card hidden">
+        <h2>Code Requirements</h2>
+        <div id="addressMeta" class="muted" style="margin-bottom:14px;"></div>
+        <ul id="addressRequirements" style="margin:0;padding-left:22px;line-height:1.6;"></ul>
+        <div id="addressAnswer" class="answer" style="margin-top:12px;"></div>
+        <details id="addressDebugWrap" class="hidden" style="margin-top:14px;">
+          <summary class="muted" style="cursor:pointer;">Model output (debug)</summary>
+          <pre id="addressDebug" style="white-space:pre-wrap;font-size:13px;margin:8px 0 0;"></pre>
+        </details>
+      </div>
+    </div>
+
+  </div>
+</div>
   <script>
     document.querySelectorAll(".tab").forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -541,6 +770,300 @@ HTML = """
         el.addEventListener("click", () => goToPdfPage(parseInt(el.dataset.page, 10)));
       });
     }
+  const addressForm = document.getElementById("addressForm");
+  const addressInput = document.getElementById("address");
+  const addressSuggestions = document.getElementById("addressSuggestions");
+  const propX = document.getElementById("propX");
+  const propY = document.getElementById("propY");
+  const propMagicKey = document.getElementById("propMagicKey");
+  const propertyContextCard = document.getElementById("propertyContextCard");
+  const addressResultCard = document.getElementById("addressResultCard");
+  const addressMeta = document.getElementById("addressMeta");
+  const addressRequirements = document.getElementById("addressRequirements");
+  const addressAnswer = document.getElementById("addressAnswer");
+  const addressDebugWrap = document.getElementById("addressDebugWrap");
+  const addressDebug = document.getElementById("addressDebug");
+  const addressSubmitBtn = document.getElementById("addressSubmitBtn");
+
+  let suggestTimer = null;
+  let activeSuggestIndex = -1;
+  let lastSuggestions = [];
+
+  function hideSuggestions() {
+    addressSuggestions.classList.add("hidden");
+    addressSuggestions.innerHTML = "";
+    activeSuggestIndex = -1;
+    lastSuggestions = [];
+  }
+
+  function renderSuggestionHighlight() {
+    const items = addressSuggestions.querySelectorAll("li");
+    items.forEach((el, i) => {
+      el.classList.toggle("active", i === activeSuggestIndex);
+    });
+  }
+
+  async function loadPropertyContextFromSelection(addrText, magicKey) {
+    propertyContextCard.classList.remove("hidden");
+    propertyContextCard.classList.remove("error");
+    propertyContextCard.innerHTML = "<span class='muted'>Loading property from Tampa GIS…</span>";
+    propX.value = "";
+    propY.value = "";
+    addressSubmitBtn.disabled = true;
+
+    try {
+      const res = await fetch("/api/property-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: addrText,
+          magic_key: magicKey || undefined
+        })
+      });
+      const ctx = await res.json();
+      if (ctx.error && !ctx.inside_city) {
+        propertyContextCard.classList.add("error");
+        propertyContextCard.innerHTML =
+          "<strong>GIS</strong><br>" + escapeHtml(ctx.error);
+        return;
+      }
+      if (ctx.error) {
+        propertyContextCard.classList.add("error");
+        propertyContextCard.innerHTML =
+          "<strong>GIS</strong><br>" + escapeHtml(ctx.error);
+        return;
+      }
+      if (!ctx.inside_city) {
+        propertyContextCard.classList.add("error");
+        propertyContextCard.innerHTML =
+          "<strong>Outside city limits</strong><br>" +
+          escapeHtml(ctx.error || "Address appears to be outside the City of Tampa.");
+        return;
+      }
+      propX.value = ctx.x != null ? String(ctx.x) : "";
+      propY.value = ctx.y != null ? String(ctx.y) : "";
+      const ov = (ctx.overlays && ctx.overlays.length) ? ctx.overlays.join(", ") : "None";
+      propertyContextCard.classList.remove("error");
+      propertyContextCard.innerHTML =
+        "<strong>Selected property</strong><br>" +
+        "<strong>Address:</strong> " + escapeHtml(ctx.normalized_address || addrText) + "<br>" +
+        "<strong>Inside Tampa:</strong> yes<br>" +
+        "<strong>Folio:</strong> " + escapeHtml(ctx.folio || "—") + "<br>" +
+        "<strong>Zoning (GIS):</strong> " + escapeHtml(ctx.zoning || "—") + "<br>" +
+        "<strong>Overlays (GIS):</strong> " + escapeHtml(ov);
+      addressSubmitBtn.disabled = !(ctx.zoning && propX.value && propY.value);
+    } catch (err) {
+      propertyContextCard.classList.add("error");
+      propertyContextCard.innerHTML = "Could not reach the property lookup service.";
+    }
+  }
+
+  function selectSuggestion(index) {
+    const s = lastSuggestions[index];
+    if (!s) return;
+    hideSuggestions();
+    addressInput.value = s.label || s.address;
+    propMagicKey.value = s.magicKey || "";
+    loadPropertyContextFromSelection(addressInput.value, propMagicKey.value);
+  }
+
+  addressInput.addEventListener("input", () => {
+    if (suggestTimer) clearTimeout(suggestTimer);
+    const q = addressInput.value.trim();
+    propMagicKey.value = "";
+    propX.value = "";
+    propY.value = "";
+    propertyContextCard.classList.add("hidden");
+    addressSubmitBtn.disabled = true;
+    if (q.length < 3) {
+      hideSuggestions();
+      return;
+    }
+    suggestTimer = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/address-suggest?q=" + encodeURIComponent(q));
+        const data = await res.json();
+        if (data.error) {
+          hideSuggestions();
+          return;
+        }
+        lastSuggestions = Array.isArray(data) ? data : [];
+        addressSuggestions.innerHTML = "";
+        if (!lastSuggestions.length) {
+          addressSuggestions.classList.add("hidden");
+          return;
+        }
+        lastSuggestions.forEach((s, i) => {
+          const li = document.createElement("li");
+          li.setAttribute("role", "option");
+          li.textContent = s.label || s.address;
+          li.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            selectSuggestion(i);
+          });
+          addressSuggestions.appendChild(li);
+        });
+        addressSuggestions.classList.remove("hidden");
+        activeSuggestIndex = -1;
+      } catch (err) {
+        hideSuggestions();
+      }
+    }, 250);
+  });
+
+  addressInput.addEventListener("keydown", (e) => {
+    if (addressSuggestions.classList.contains("hidden")) return;
+    const n = lastSuggestions.length;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeSuggestIndex = Math.min(activeSuggestIndex + 1, n - 1);
+      renderSuggestionHighlight();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeSuggestIndex = Math.max(activeSuggestIndex - 1, 0);
+      renderSuggestionHighlight();
+    } else if (e.key === "Enter" && activeSuggestIndex >= 0) {
+      e.preventDefault();
+      selectSuggestion(activeSuggestIndex);
+    } else if (e.key === "Escape") {
+      hideSuggestions();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!addressSuggestions.contains(e.target) && e.target !== addressInput) {
+      hideSuggestions();
+    }
+  });
+
+  addressForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const address = document.getElementById("address").value.trim();
+    const permitType = document.getElementById("permitType").value;
+    const projectDesc = document.getElementById("projectDesc").value;
+    const x = propX.value;
+    const y = propY.value;
+
+    if (!address) return;
+    if (!x || !y) {
+      alert("Select an address from the suggestions and wait for Tampa GIS property context to load.");
+      return;
+    }
+
+    addressResultCard.classList.remove("hidden");
+    addressMeta.textContent = "";
+    addressRequirements.innerHTML = "";
+    addressAnswer.textContent = "";
+    addressAnswer.classList.add("typing");
+    addressDebugWrap.classList.add("hidden");
+    addressDebug.textContent = "";
+
+    addressSubmitBtn.disabled = true;
+    addressSubmitBtn.textContent = "Analyzing...";
+
+    try {
+      const res = await fetch("/address-review", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          address,
+          x: parseFloat(x),
+          y: parseFloat(y),
+          permit_type: permitType,
+          project_description: projectDesc
+        })
+      });
+
+      if (!res.ok) {
+        let errText = "There was an error processing your request.";
+        try {
+          const errBody = await res.json();
+          if (errBody.error) errText = errBody.error;
+        } catch (e2) {}
+        addressAnswer.classList.remove("typing");
+        addressAnswer.textContent = errText;
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\\n");
+        buffer = parts.pop();
+
+        for (const line of parts) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+
+            if (msg.type === "delta") {
+              addressAnswer.textContent += msg.text;
+            } else if (msg.type === "meta") {
+              const zoning = msg.zoning || "";
+              const overlays = msg.overlays || [];
+              const folio = msg.folio;
+              const inside = msg.inside_city !== false;
+              addressMeta.innerHTML =
+                "<strong>Inside Tampa:</strong> " + (inside ? "yes" : "no") + "<br>" +
+                "<strong>Folio:</strong> " + escapeHtml(folio || "—") + "<br>" +
+                "<strong>Zoning (GIS):</strong> " + escapeHtml(zoning) +
+                "<br><strong>Overlays (GIS):</strong> " +
+                escapeHtml((overlays && overlays.length) ? overlays.join(", ") : "None");
+            } else if (msg.type === "sources") {
+              addressAnswer.classList.remove("typing");
+
+              const reqs = msg.requirements || [];
+              const raw = msg.raw_text || "";
+              addressRequirements.innerHTML = "";
+
+              if (reqs.length) {
+                addressAnswer.textContent = "";
+                reqs.forEach((r) => {
+                  const li = document.createElement("li");
+                  const page = r.page;
+                  li.innerHTML =
+                    "<strong>" + escapeHtml(r.name) + ":</strong> " +
+                    escapeHtml(r.value) +
+                    ' (<span class="page-link" data-page="' + page + '">page ' + page + "</span>)";
+                  li.querySelector(".page-link").addEventListener("click", () => goToPdfPage(page));
+                  addressRequirements.appendChild(li);
+                });
+              } else if (raw) {
+                addressAnswer.textContent = raw;
+                linkifyPageNumbers(addressAnswer);
+              } else {
+                addressAnswer.textContent = "";
+              }
+
+              if (raw) {
+                addressDebug.textContent = raw;
+                addressDebugWrap.classList.remove("hidden");
+              }
+            } else if (msg.type === "error") {
+              addressAnswer.classList.remove("typing");
+              addressAnswer.textContent = msg.text;
+              addressRequirements.innerHTML = "";
+            }
+          } catch (err) {}
+        }
+      }
+
+      addressAnswer.classList.remove("typing");
+    } catch (err) {
+      addressAnswer.classList.remove("typing");
+      addressAnswer.textContent = "There was an error processing your request.";
+    } finally {
+      addressSubmitBtn.disabled = false;
+      addressSubmitBtn.textContent = "Get Requirements";
+    }
+  });
   </script>
 </body>
 </html>
@@ -576,6 +1099,47 @@ def serve_pdf():
     if not os.path.exists(PDF_PATH):
         return "PDF not found", 404
     return send_file(PDF_PATH, mimetype="application/pdf", as_attachment=False)
+
+
+@app.route("/api/address-suggest", methods=["GET"])
+def api_address_suggest():
+    """Tampa GIS-backed address autocomplete (ArcGIS Locator /suggest)."""
+    if not session.get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 3:
+        return jsonify([])
+    try:
+        return jsonify(suggest_tampa_addresses(q))
+    except Exception as e:
+        return jsonify({"error": "Address search failed.", "detail": str(e)}), 502
+
+
+@app.route("/api/property-context", methods=["POST"])
+def api_property_context():
+    """Resolve zoning, overlays, folio, and city limits from Tampa GIS (no LLM)."""
+    if not session.get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    address = (data.get("address") or "").strip()
+    magic_key = data.get("magic_key") or data.get("magicKey")
+    x = data.get("x")
+    y = data.get("y")
+    try:
+        xf = float(x) if x is not None else None
+        yf = float(y) if y is not None else None
+    except (TypeError, ValueError):
+        xf = yf = None
+    try:
+        ctx = get_tampa_property_context(
+            address=address,
+            x=xf,
+            y=yf,
+            magic_key=magic_key,
+        )
+    except Exception as e:
+        return jsonify({"error": "GIS lookup failed.", "detail": str(e)}), 502
+    return jsonify(ctx)
 
 
 @app.route("/", methods=["GET"])
@@ -624,6 +1188,108 @@ def ask():
 
     return Response(generate(), mimetype="text/plain")
 
+@app.route("/address-review", methods=["POST"])
+def address_review():
+    if not session.get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+
+    address = (data.get("address") or "").strip()
+    permit_type = (data.get("permit_type") or "").strip()
+    project_description = (data.get("project_description") or "").strip()
+
+    if not address:
+        return jsonify({"error": "Missing address"}), 400
+
+    try:
+        x = float(data.get("x"))
+        y = float(data.get("y"))
+    except (TypeError, ValueError):
+        return jsonify({
+            "error": "Property location required. Select an address and load property context from Tampa GIS first.",
+        }), 400
+
+    try:
+        ctx = get_tampa_property_context(address=address, x=x, y=y)
+    except Exception as e:
+        return jsonify({"error": "Could not verify property with Tampa GIS.", "detail": str(e)}), 502
+
+    if ctx.get("error"):
+        return jsonify({"error": ctx["error"]}), 400
+    if not ctx.get("inside_city"):
+        return jsonify({
+            "error": ctx.get("error") or "Address appears to be outside the City of Tampa.",
+        }), 400
+
+    zoning = ctx.get("zoning")
+    overlays = list(ctx.get("overlays") or [])
+    if not zoning:
+        return jsonify({"error": "Zoning could not be determined from GIS."}), 400
+
+    normalized = (ctx.get("normalized_address") or address).strip()
+    search_query = build_address_query(
+        permit_type, project_description, zoning=zoning, overlays=overlays
+    )
+
+    display_question = f"""Property address: {normalized}
+Zoning district (from City of Tampa GIS): {zoning}
+Overlays (from GIS): {", ".join(overlays) if overlays else "None"}
+Folio (from parcel GIS, if matched): {ctx.get("folio") or "Not matched"}
+Permit / project type: {permit_type or "(not specified)"}
+Project description: {project_description or "(not specified)"}
+
+Extract explicit code requirements that apply to this scenario from the excerpts (dimensional standards, setbacks, height, parking, lot size, and any other requirements clearly stated in the excerpts)."""
+
+    prompt, results, prep_error = build_address_prompt(search_query, display_question)
+
+    def generate():
+        if prep_error:
+            yield json.dumps({
+                "type": "meta",
+                "address": normalized,
+                "zoning": zoning,
+                "overlays": overlays,
+                "folio": ctx.get("folio"),
+                "inside_city": True,
+            }) + "\n"
+            yield json.dumps({"type": "error", "text": prep_error}) + "\n"
+            return
+
+        try:
+            yield json.dumps({
+                "type": "meta",
+                "address": normalized,
+                "zoning": zoning,
+                "overlays": overlays,
+                "folio": ctx.get("folio"),
+                "inside_city": True,
+            }) + "\n"
+
+            full_text = []
+            with client.responses.stream(
+                model="gpt-5-mini",
+                input=prompt
+            ) as stream:
+                for event in stream:
+                    if event.type == "response.output_text.delta":
+                        full_text.append(event.delta)
+                        yield json.dumps({"type": "delta", "text": event.delta}) + "\n"
+
+            raw_text = "".join(full_text)
+            requirements = parse_requirements(raw_text)
+
+            yield json.dumps({
+                "type": "sources",
+                "results": results,
+                "requirements": requirements,
+                "raw_text": raw_text,
+            }) + "\n"
+
+        except Exception as e:
+            yield json.dumps({"type": "error", "text": str(e)}) + "\n"
+
+    return Response(generate(), mimetype="text/plain")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

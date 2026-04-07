@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import os
 import json
 import re
+import time
 
 load_dotenv()
 
@@ -17,6 +18,20 @@ LOGIN_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "test123")
 
 # Squared L2 distance from FAISS; tune via env if needed (lower = closer match).
 ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
+
+# Address review performance (smaller RAG + shorter model reasoning = faster API).
+ADDRESS_REVIEW_RAG_K = max(1, int(os.getenv("ADDRESS_REVIEW_RAG_K", "5")))
+# Per-chunk character cap for the model context (0 = no truncation). Cuts input latency on huge chunks.
+_cmc = os.getenv("ADDRESS_REVIEW_CHUNK_MAX_CHARS", "4500").strip()
+ADDRESS_REVIEW_CHUNK_MAX_CHARS = None if _cmc in ("", "0") else max(500, int(_cmc))
+ADDRESS_REVIEW_MODEL = os.getenv("ADDRESS_REVIEW_MODEL", "gpt-5-mini")
+ADDRESS_REVIEW_MAX_OUTPUT_TOKENS = int(os.getenv("ADDRESS_REVIEW_MAX_OUTPUT_TOKENS", "4096"))
+# For gpt-5 / o-series: lower reasoning effort speeds up responses (minimal | low | medium | high).
+ADDRESS_REVIEW_REASONING_EFFORT = os.getenv("ADDRESS_REVIEW_REASONING_EFFORT", "low").strip() or "low"
+
+# Short TTL cache: browser loads GIS on address pick, then /address-review hits GIS again — reuse when coords + address match.
+_GIS_REVIEW_CACHE: dict[tuple[float, float, str], tuple[float, dict]] = {}
+GIS_REVIEW_CACHE_TTL_SEC = float(os.getenv("GIS_REVIEW_CACHE_TTL_SEC", "120"))
 
 
 def build_address_query(
@@ -84,21 +99,67 @@ def build_address_query(
     return " ".join(merged)
 
 
-def _format_context(results: list) -> str:
+def _gis_cache_store(address: str, ctx: dict) -> None:
+    """So /address-review can skip a second full GIS round-trip right after property context loads."""
+    x, y = ctx.get("x"), ctx.get("y")
+    if x is None or y is None:
+        return
+    addr_key = (address or "").strip().lower()
+    key = (round(float(x), 4), round(float(y), 4), addr_key)
+    _GIS_REVIEW_CACHE[key] = (time.time(), ctx)
+
+
+def _property_context_for_address_review(address: str, x: float, y: float) -> dict:
+    """Same as get_tampa_property_context but avoids duplicate ArcGIS round-trips after autocomplete."""
+    addr_key = (address or "").strip().lower()
+    key = (round(float(x), 4), round(float(y), 4), addr_key)
+    now = time.time()
+    hit = _GIS_REVIEW_CACHE.get(key)
+    if hit and now - hit[0] < GIS_REVIEW_CACHE_TTL_SEC:
+        return hit[1]
+    ctx = get_tampa_property_context(address=address, x=x, y=y)
+    _GIS_REVIEW_CACHE[key] = (now, ctx)
+    return ctx
+
+
+def _format_context(results: list, max_chunk_chars: int | None = None) -> str:
     context_blocks = []
     for r in results:
-        context_blocks.append(f"[Page {r['page']} | {r['chunk_id']}]\n{r['text']}")
+        text = r["text"]
+        if max_chunk_chars and len(text) > max_chunk_chars:
+            text = text[:max_chunk_chars].rstrip() + "\n[… truncated for speed; see PDF for full section.]"
+        context_blocks.append(f"[Page {r['page']} | {r['chunk_id']}]\n{text}")
     return "\n\n".join(context_blocks)
 
 
-def build_prompt(search_query: str, display_question: str):
-    results = search(search_query, k=10)
-    prompt = _compose_prompt(display_question, results, mode="ask")
+def _responses_stream_kwargs_address(model: str, prompt: str) -> dict:
+    """Tuned for latency: cap output size; reduce reasoning depth on gpt-5 family."""
+    kwargs: dict = {
+        "model": model,
+        "input": prompt,
+        "max_output_tokens": ADDRESS_REVIEW_MAX_OUTPUT_TOKENS,
+    }
+    if model.startswith(("gpt-5", "o")) and ADDRESS_REVIEW_REASONING_EFFORT != "none":
+        kwargs["reasoning"] = {"effort": ADDRESS_REVIEW_REASONING_EFFORT}
+    return kwargs
+
+
+def build_prompt(question: str):
+    """RAG prompt for the Search tab; same string is used for embedding search and LLM question text."""
+    q = (question or "").strip()
+    results = search(q, k=5)
+    prompt = _compose_prompt(q, results, mode="ask")
     return prompt, results
 
 
-def _compose_prompt(display_question: str, results: list, mode: str) -> str:
-    context = _format_context(results)
+def _compose_prompt(
+    display_question: str,
+    results: list,
+    mode: str,
+    *,
+    max_chunk_chars: int | None = None,
+) -> str:
+    context = _format_context(results, max_chunk_chars=max_chunk_chars)
     if mode == "address":
         return f"""You are a zoning and land use reviewer.
 
@@ -145,12 +206,17 @@ def build_address_prompt(search_query: str, display_question: str):
     RAG prompt for address review with relevance check on the best FAISS hit.
     Returns (prompt, results) or (None, None) with failure reason for callers.
     """
-    results, distances = search_with_distances(search_query, k=10)
+    results, distances = search_with_distances(search_query, k=ADDRESS_REVIEW_RAG_K)
     if not results or not distances:
         return None, None, "Unable to find relevant code sections for this request."
     if distances[0] > ADDRESS_SEARCH_MAX_DISTANCE:
         return None, None, "Unable to find relevant code sections for this request."
-    prompt = _compose_prompt(display_question, results, mode="address")
+    prompt = _compose_prompt(
+        display_question,
+        results,
+        mode="address",
+        max_chunk_chars=ADDRESS_REVIEW_CHUNK_MAX_CHARS,
+    )
     return prompt, results, None
 
 
@@ -1139,6 +1205,7 @@ def api_property_context():
         )
     except Exception as e:
         return jsonify({"error": "GIS lookup failed.", "detail": str(e)}), 502
+    _gis_cache_store(address, ctx)
     return jsonify(ctx)
 
 
@@ -1211,7 +1278,7 @@ def address_review():
         }), 400
 
     try:
-        ctx = get_tampa_property_context(address=address, x=x, y=y)
+        ctx = _property_context_for_address_review(address=address, x=x, y=y)
     except Exception as e:
         return jsonify({"error": "Could not verify property with Tampa GIS.", "detail": str(e)}), 502
 
@@ -1268,8 +1335,7 @@ Extract explicit code requirements that apply to this scenario from the excerpts
 
             full_text = []
             with client.responses.stream(
-                model="gpt-5-mini",
-                input=prompt
+                **_responses_stream_kwargs_address(ADDRESS_REVIEW_MODEL, prompt)
             ) as stream:
                 for event in stream:
                     if event.type == "response.output_text.delta":

@@ -662,6 +662,30 @@ HTML = """
     }
     #addressForm label { display: block; margin-top: 12px; }
     #addressForm label:first-of-type { margin-top: 0; }
+    #addressForm select {
+      width: 100%;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #cbd5e1;
+      font-size: 16px;
+      box-sizing: border-box;
+      margin-top: 8px;
+      background: white;
+      color: #1f2937;
+      appearance: auto;
+    }
+    .btn-export {
+      margin-top: 0;
+      padding: 6px 14px;
+      font-size: 13px;
+      background: #f1f5f9;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-export:hover { background: #e2e8f0; }
   </style>
 </head>
 <body>
@@ -741,7 +765,30 @@ HTML = """
           <div id="propertyContextCard" class="property-context-card hidden"></div>
 
           <label for="permitType"><strong>Permit Type</strong></label>
-          <input id="permitType" type="text" placeholder="Single-family, duplex, site plan..." />
+          <select id="permitType">
+            <option value="">— Select a permit type —</option>
+            <optgroup label="Residential">
+              <option>Single-Family New Construction</option>
+              <option>Single-Family Addition / Alteration</option>
+              <option>Duplex New Construction</option>
+              <option>Accessory Dwelling Unit (ADU)</option>
+              <option>Accessory Structure (shed, garage, carport)</option>
+              <option>Pool / Spa</option>
+              <option>Fence</option>
+              <option>Deck / Patio</option>
+            </optgroup>
+            <optgroup label="Multifamily / Commercial">
+              <option>Multifamily New Construction</option>
+              <option>Commercial New Construction</option>
+              <option>Commercial Renovation / Tenant Improvement</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option>Demolition</option>
+              <option>Site Plan Review</option>
+              <option value="__other__">Other — type below</option>
+            </optgroup>
+          </select>
+          <input id="permitTypeOther" type="text" class="hidden" placeholder="Describe permit type…" style="margin-top:6px;" />
 
           <label for="projectDesc"><strong>Project Description</strong></label>
           <textarea id="projectDesc" placeholder="Example: setbacks and building height"></textarea>
@@ -752,7 +799,13 @@ HTML = """
       </div>
 
       <div id="addressResultCard" class="card hidden">
-        <h2>Code Requirements</h2>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h2 style="margin:0;">Code Requirements</h2>
+          <div id="exportBtns" class="hidden" style="display:flex;gap:8px;">
+            <button type="button" id="copyBtn" class="btn-export">Copy</button>
+            <button type="button" id="csvBtn" class="btn-export">Download CSV</button>
+          </div>
+        </div>
         <div id="addressMeta" class="muted" style="margin-bottom:14px;"></div>
         <ul id="addressRequirements" style="margin:0;padding-left:22px;line-height:1.6;"></ul>
         <div id="addressAnswer" class="answer" style="margin-top:12px;"></div>
@@ -940,6 +993,22 @@ HTML = """
   let suggestTimer = null;
   let activeSuggestIndex = -1;
   let lastSuggestions = [];
+  let lastRequirements = [];
+  let lastReviewAddress = "";
+  let lastReviewZoning  = "";
+
+  // Permit type "Other" toggle
+  const permitTypeEl      = document.getElementById("permitType");
+  const permitTypeOtherEl = document.getElementById("permitTypeOther");
+  permitTypeEl.addEventListener("change", () => {
+    if (permitTypeEl.value === "__other__") {
+      permitTypeOtherEl.classList.remove("hidden");
+      permitTypeOtherEl.focus();
+    } else {
+      permitTypeOtherEl.classList.add("hidden");
+      permitTypeOtherEl.value = "";
+    }
+  });
 
   function hideSuggestions() {
     addressSuggestions.classList.add("hidden");
@@ -1092,7 +1161,10 @@ HTML = """
     e.preventDefault();
 
     const address = document.getElementById("address").value.trim();
-    const permitType = document.getElementById("permitType").value;
+    const rawPermitType = permitTypeEl.value;
+    const permitType = rawPermitType === "__other__"
+      ? permitTypeOtherEl.value.trim()
+      : rawPermitType;
     const projectDesc = document.getElementById("projectDesc").value;
     const x = propX.value;
     const y = propY.value;
@@ -1162,6 +1234,8 @@ HTML = """
               const overlays = msg.overlays || [];
               const folio = msg.folio;
               const inside = msg.inside_city !== false;
+              lastReviewAddress = msg.address || document.getElementById("address").value.trim();
+              lastReviewZoning  = zoning;
               addressMeta.innerHTML =
                 "<strong>Inside Tampa:</strong> " + (inside ? "yes" : "no") + "<br>" +
                 "<strong>Folio:</strong> " + escapeHtml(folio || "—") + "<br>" +
@@ -1174,6 +1248,7 @@ HTML = """
               const reqs = msg.requirements || [];
               const raw = msg.raw_text || "";
               addressRequirements.innerHTML = "";
+              lastRequirements = reqs;
 
               if (reqs.length) {
                 addressAnswer.textContent = "";
@@ -1187,11 +1262,14 @@ HTML = """
                   li.querySelector(".page-link").addEventListener("click", () => goToPdfPage(page));
                   addressRequirements.appendChild(li);
                 });
+                document.getElementById("exportBtns").classList.remove("hidden");
               } else if (raw) {
                 addressAnswer.textContent = raw;
                 linkifyPageNumbers(addressAnswer);
+                document.getElementById("exportBtns").classList.add("hidden");
               } else {
                 addressAnswer.textContent = "";
+                document.getElementById("exportBtns").classList.add("hidden");
               }
 
               if (raw) {
@@ -1215,6 +1293,41 @@ HTML = """
       addressSubmitBtn.disabled = false;
       addressSubmitBtn.textContent = "Get Requirements";
     }
+  });
+
+  // ── Export helpers ────────────────────────────────────────────────────────
+  document.getElementById("csvBtn").addEventListener("click", () => {
+    if (!lastRequirements.length) return;
+    const header = ["Requirement", "Value", "Page"];
+    const rows = lastRequirements.map(r => [r.name, r.value, r.page]);
+    const csv = [header, ...rows]
+      .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
+      .join("\\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    const slug = lastReviewAddress.replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 40);
+    a.href     = url;
+    a.download = `requirements-${slug}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById("copyBtn").addEventListener("click", () => {
+    if (!lastRequirements.length) return;
+    const lines = [
+      `Code Requirements — ${lastReviewAddress}`,
+      `Zoning: ${lastReviewZoning}`,
+      "",
+      ...lastRequirements.map(r => `• ${r.name}: ${r.value} (page ${r.page})`),
+      "",
+      "Generated by PermitIQ — verify against official Tampa City Code before relying on these results.",
+    ];
+    navigator.clipboard.writeText(lines.join("\\n")).then(() => {
+      const btn = document.getElementById("copyBtn");
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+    });
   });
   </script>
 </body>

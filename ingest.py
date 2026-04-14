@@ -16,8 +16,8 @@ INDEX_PATH = "tampa_code.index"
 CHUNKS_PATH = "chunks.json"
 EMBED_MODEL = "text-embedding-3-small"
 
-MAX_CHARS = 1200
-OVERLAP = 150
+MAX_CHARS = 3500
+OVERLAP = 350
 
 
 def clean_text(text: str) -> str:
@@ -130,17 +130,14 @@ def build_chunks(pages):
     return all_chunks
 
 
-def embed_texts(texts):
+def embed_texts(texts, batch_size=100):
     embeddings = []
-
-    for i, text in enumerate(texts):
-        print(f"Embedding {i+1}/{len(texts)}")
-        response = client.embeddings.create(
-            model=EMBED_MODEL,
-            input=text
-        )
-        embeddings.append(response.data[0].embedding)
-
+    total = len(texts)
+    for i in range(0, total, batch_size):
+        batch = texts[i:i + batch_size]
+        print(f"Embedding {i + 1}–{min(i + batch_size, total)} of {total}…")
+        response = client.embeddings.create(model=EMBED_MODEL, input=batch)
+        embeddings.extend([d.embedding for d in sorted(response.data, key=lambda x: x.index)])
     return np.array(embeddings, dtype="float32")
 
 

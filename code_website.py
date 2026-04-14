@@ -23,9 +23,12 @@ DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
 ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
 SEARCH_K          = int(os.getenv("SEARCH_K", "10"))          # RAG chunks retrieved per query
 GIS_CACHE_TTL_SEC = int(os.getenv("GIS_CACHE_TTL_SEC", "3600"))  # 1-hour persistent GIS cache
-AUDIT_ENABLED     = os.getenv("AUDIT_ENABLED", "true").lower() != "false"
-SEARCH_MODEL      = os.getenv("SEARCH_MODEL", "gpt-4o-mini")
-ADDRESS_MODEL     = os.getenv("ADDRESS_MODEL", "gpt-4o-mini")
+AUDIT_ENABLED       = os.getenv("AUDIT_ENABLED", "true").lower() != "false"
+SEARCH_MODEL        = os.getenv("SEARCH_MODEL", "gpt-4o-mini")
+ADDRESS_MODEL       = os.getenv("ADDRESS_MODEL", "gpt-4o")
+MULTI_QUERY_ENABLED = os.getenv("MULTI_QUERY_ENABLED", "true").lower() != "false"
+MULTI_QUERY_N       = int(os.getenv("MULTI_QUERY_N", "3"))
+MULTI_QUERY_K       = 5  # k per expanded query; merged results trimmed to SEARCH_K
 
 # ── Flask app + limiter ───────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -66,6 +69,18 @@ def _init_db() -> None:
                 zoning       TEXT,
                 result_count INTEGER,
                 error        TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS feedback_log (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts             TEXT NOT NULL,
+                query_type     TEXT NOT NULL,
+                question       TEXT,
+                address        TEXT,
+                zoning         TEXT,
+                answer_snippet TEXT,
+                comment        TEXT
             )
         """)
         conn.commit()
@@ -184,8 +199,55 @@ def _format_context(results: list) -> str:
     return "\n\n".join(context_blocks)
 
 
+def expand_query(base_query: str, n: int = MULTI_QUERY_N) -> list[str]:
+    """Ask gpt-4o-mini to generate n diverse paraphrased search queries.
+    Returns a list of strings, or [] on any failure (never raises)."""
+    try:
+        prompt = (
+            f"Generate {n} diverse paraphrased versions of the following search query "
+            "for searching Tampa municipal zoning and building code.\n"
+            "Each version should use different terminology to maximize retrieval coverage.\n"
+            f"Return ONLY a JSON array of {n} strings, no other text.\n\n"
+            f"Query: {base_query}"
+        )
+        resp = client.responses.create(model="gpt-4o-mini", input=prompt)
+        text = (resp.output_text or "").strip()
+        start, end = text.find("["), text.rfind("]") + 1
+        if start >= 0 and end > start:
+            queries = json.loads(text[start:end])
+            return [q for q in queries if isinstance(q, str) and q.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def multi_search(
+    base_query: str,
+    extra_queries: list[str],
+    k_per: int,
+    top_k: int,
+) -> tuple[list, list]:
+    """Search FAISS with base + expanded queries, deduplicate by chunk_id,
+    return top_k results sorted by ascending distance."""
+    seen: dict[str, tuple[dict, float]] = {}
+    for q in [base_query] + extra_queries:
+        results, distances = search_with_distances(q, k=k_per)
+        for r, d in zip(results, distances):
+            cid = r["chunk_id"]
+            if cid not in seen or d < seen[cid][1]:
+                seen[cid] = (r, d)
+    sorted_items = sorted(seen.values(), key=lambda x: x[1])[:top_k]
+    raw_results = [r for r, _ in sorted_items]
+    dist_list   = [d for _, d in sorted_items]
+    return raw_results, dist_list
+
+
 def build_prompt(search_query: str, display_question: str):
-    raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
+    if MULTI_QUERY_ENABLED:
+        extra = expand_query(search_query)
+        raw_results, distances = multi_search(search_query, extra, MULTI_QUERY_K, SEARCH_K)
+    else:
+        raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
     results = [dict(r, distance=round(d, 4)) for r, d in zip(raw_results, distances)]
     prompt = _compose_prompt(display_question, results, mode="ask")
     return prompt, results
@@ -242,7 +304,11 @@ def build_address_prompt(search_query: str, display_question: str):
     RAG prompt for address review.
     Returns (prompt, results, error) — results carry a 'distance' field for confidence display.
     """
-    raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
+    if MULTI_QUERY_ENABLED:
+        extra = expand_query(search_query)
+        raw_results, distances = multi_search(search_query, extra, MULTI_QUERY_K, SEARCH_K)
+    else:
+        raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
     if not raw_results or not distances:
         return None, None, "Unable to find relevant code sections for this request."
     if distances[0] > ADDRESS_SEARCH_MAX_DISTANCE:
@@ -686,6 +752,9 @@ HTML = """
       cursor: pointer;
     }
     .btn-export:hover { background: #e2e8f0; }
+    .flag-link { font-size:13px; color:#64748b; text-decoration:none; }
+    .flag-link:hover { color:#b91c1c; text-decoration:underline; }
+    .feedback-form textarea { min-height:60px; font-size:14px; width:100%; box-sizing:border-box; }
   </style>
 </head>
 <body>
@@ -721,6 +790,14 @@ HTML = """
     <div id="answerCard" class="card hidden">
       <h2>Answer</h2>
       <div id="answer" class="answer"></div>
+      <div id="searchFeedbackWrap" style="margin-top:12px;">
+        <a href="#" id="searchFlagLink" class="flag-link">Flag answer</a>
+        <div id="searchFeedbackForm" class="feedback-form hidden">
+          <textarea id="searchFeedbackComment" placeholder="Optional: describe the issue…" style="margin-top:6px;"></textarea>
+          <button type="button" id="searchFeedbackSubmit" style="margin-top:6px;padding:6px 14px;font-size:13px;">Submit</button>
+          <span id="searchFeedbackThanks" class="hidden muted" style="margin-left:10px;">Thanks for the feedback!</span>
+        </div>
+      </div>
     </div>
 
     <div id="resultsCard" class="card hidden">
@@ -813,6 +890,14 @@ HTML = """
           <summary class="muted" style="cursor:pointer;">Model output (debug)</summary>
           <pre id="addressDebug" style="white-space:pre-wrap;font-size:13px;margin:8px 0 0;"></pre>
         </details>
+        <div id="addressFeedbackWrap" style="margin-top:12px;">
+          <a href="#" id="addressFlagLink" class="flag-link">Flag answer</a>
+          <div id="addressFeedbackForm" class="feedback-form hidden">
+            <textarea id="addressFeedbackComment" placeholder="Optional: describe the issue…" style="margin-top:6px;"></textarea>
+            <button type="button" id="addressFeedbackSubmit" style="margin-top:6px;padding:6px 14px;font-size:13px;">Submit</button>
+            <span id="addressFeedbackThanks" class="hidden muted" style="margin-left:10px;">Thanks for the feedback!</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -841,6 +926,13 @@ HTML = """
 
       const question = questionEl.value.trim();
       if (!question) return;
+
+      lastSearchQuestion = question;
+      lastSearchAnswer   = "";
+      document.getElementById("searchFeedbackForm").classList.add("hidden");
+      document.getElementById("searchFeedbackThanks").classList.add("hidden");
+      document.getElementById("searchFlagLink").style.display = "";
+      document.getElementById("searchFeedbackComment").value = "";
 
       submitBtn.disabled = true;
       submitBtn.textContent = "Thinking...";
@@ -895,6 +987,7 @@ HTML = """
                   answerEl.textContent = "";
                 }
                 answerEl.textContent += msg.text;
+                lastSearchAnswer += msg.text;
               } else if (msg.type === "sources") {
                 answerEl.classList.remove("typing");
                 resultsEl.innerHTML = "";
@@ -996,6 +1089,8 @@ HTML = """
   let lastRequirements = [];
   let lastReviewAddress = "";
   let lastReviewZoning  = "";
+  let lastSearchQuestion = "";
+  let lastSearchAnswer   = "";
 
   // Permit type "Other" toggle
   const permitTypeEl      = document.getElementById("permitType");
@@ -1182,6 +1277,10 @@ HTML = """
     addressAnswer.classList.add("typing");
     addressDebugWrap.classList.add("hidden");
     addressDebug.textContent = "";
+    document.getElementById("addressFeedbackForm").classList.add("hidden");
+    document.getElementById("addressFeedbackThanks").classList.add("hidden");
+    document.getElementById("addressFlagLink").style.display = "";
+    document.getElementById("addressFeedbackComment").value = "";
 
     addressSubmitBtn.disabled = true;
     addressSubmitBtn.textContent = "Analyzing...";
@@ -1329,6 +1428,67 @@ HTML = """
       setTimeout(() => { btn.textContent = "Copy"; }, 2000);
     });
   });
+
+  // ── Feedback helpers ──────────────────────────────────────────────────────
+  async function submitFeedback(payload) {
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return res.ok;
+    } catch (e) { return false; }
+  }
+
+  // Search tab — flag answer
+  document.getElementById("searchFlagLink").addEventListener("click", (e) => {
+    e.preventDefault();
+    document.getElementById("searchFeedbackForm").classList.toggle("hidden");
+  });
+
+  document.getElementById("searchFeedbackSubmit").addEventListener("click", async () => {
+    const comment = document.getElementById("searchFeedbackComment").value.trim();
+    const btn = document.getElementById("searchFeedbackSubmit");
+    btn.disabled = true;
+    const ok = await submitFeedback({
+      query_type:     "search",
+      question:       lastSearchQuestion,
+      answer_snippet: lastSearchAnswer.slice(0, 500),
+      comment
+    });
+    btn.disabled = false;
+    if (ok) {
+      document.getElementById("searchFeedbackThanks").classList.remove("hidden");
+      document.getElementById("searchFeedbackForm").classList.add("hidden");
+      document.getElementById("searchFlagLink").style.display = "none";
+    }
+  });
+
+  // Address review tab — flag answer
+  document.getElementById("addressFlagLink").addEventListener("click", (e) => {
+    e.preventDefault();
+    document.getElementById("addressFeedbackForm").classList.toggle("hidden");
+  });
+
+  document.getElementById("addressFeedbackSubmit").addEventListener("click", async () => {
+    const comment = document.getElementById("addressFeedbackComment").value.trim();
+    const btn = document.getElementById("addressFeedbackSubmit");
+    btn.disabled = true;
+    const ok = await submitFeedback({
+      query_type:     "address_review",
+      address:        lastReviewAddress,
+      zoning:         lastReviewZoning,
+      answer_snippet: document.getElementById("addressDebug").textContent.slice(0, 500),
+      comment
+    });
+    btn.disabled = false;
+    if (ok) {
+      document.getElementById("addressFeedbackThanks").classList.remove("hidden");
+      document.getElementById("addressFeedbackForm").classList.add("hidden");
+      document.getElementById("addressFlagLink").style.display = "none";
+    }
+  });
   </script>
 </body>
 </html>
@@ -1414,6 +1574,34 @@ def api_property_context():
 
     gis_cache_set(cache_key, ctx)
     return jsonify(ctx)
+
+
+@app.route("/api/feedback", methods=["POST"])
+def api_feedback():
+    """Store a user-flagged answer in feedback_log."""
+    if not session.get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    query_type = (data.get("query_type") or "").strip()
+    if not query_type:
+        return jsonify({"error": "query_type required"}), 400
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO feedback_log "
+                "(ts, query_type, question, address, zoning, answer_snippet, comment) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ts, query_type,
+                    data.get("question"), data.get("address"), data.get("zoning"),
+                    data.get("answer_snippet"), data.get("comment"),
+                ),
+            )
+            conn.commit()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
 
 
 @app.route("/", methods=["GET"])

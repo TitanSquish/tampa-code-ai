@@ -11,7 +11,10 @@ load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-PDF_PATH = "data/tampa-code-5-27.pdf"
+PDFS = [
+    {"path": "data/tampa-code-5-27.pdf",             "source": "tampa_code_5_27"},
+    {"path": "data/csd-sufficiency-checklist_1.pdf", "source": "csd_sufficiency_checklist"},
+]
 INDEX_PATH = "tampa_code.index"
 CHUNKS_PATH = "chunks.json"
 EMBED_MODEL = "text-embedding-3-small"
@@ -102,7 +105,7 @@ def get_chapter(text: str):
     return None
 
 
-def build_chunks(pages):
+def build_chunks(pages, source: str = "tampa_code_5_27"):
     all_chunks = []
 
     for page_obj in pages:
@@ -119,11 +122,11 @@ def build_chunks(pages):
 
             for chunk_idx, chunk_text in enumerate(subchunks):
                 all_chunks.append({
-                    "source": "tampa_code_5_27",
+                    "source": source,
                     "chapter": chapter,
                     "section": section_id,
                     "page": page_num,
-                    "chunk_id": f"{section_id}-chunk-{chunk_idx}",
+                    "chunk_id": f"{source}-{section_id}-chunk-{chunk_idx}",
                     "text": chunk_text
                 })
 
@@ -156,22 +159,20 @@ def save_index_and_chunks(chunks, embeddings):
 
 
 def main():
-    print("Extracting pages...")
-    pages = extract_pages(PDF_PATH)
+    all_chunks = []
+    for entry in PDFS:
+        print(f"Processing {entry['path']} ...")
+        pages = extract_pages(entry["path"])
+        chunks = build_chunks(pages, source=entry["source"])
+        print(f"  {len(chunks)} chunks from {entry['source']}")
+        all_chunks.extend(chunks)
 
-    print("Building chunks...")
-    chunks = build_chunks(pages)
-
-    print(f"Built {len(chunks)} chunks")
-
-    texts = [c["text"] for c in chunks]
-
+    print(f"Total: {len(all_chunks)} chunks")
     print("Generating embeddings...")
-    embeddings = embed_texts(texts)
+    embeddings = embed_texts([c["text"] for c in all_chunks])
 
     print("Saving FAISS index...")
-    save_index_and_chunks(chunks, embeddings)
-
+    save_index_and_chunks(all_chunks, embeddings)
     print("Done.")
 
 

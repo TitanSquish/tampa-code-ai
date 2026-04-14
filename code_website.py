@@ -1,37 +1,115 @@
 from flask import Flask, request, render_template_string, redirect, url_for, session, Response, jsonify, send_file
-from search import search, search_with_distances
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from search import search_with_distances
 from tampa_gis import get_tampa_property_context, suggest_tampa_addresses
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
 import re
+import sqlite3
 import time
+from datetime import datetime, timezone
 
 load_dotenv()
 
+# ── Paths ────────────────────────────────────────────────────────────────────
+_BASE = os.path.dirname(__file__)
+PDF_PATH  = os.path.join(_BASE, "data", "tampa-code-5-27.pdf")
+DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
+
+# ── Config (all overridable via environment variables) ───────────────────────
+ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
+SEARCH_K          = int(os.getenv("SEARCH_K", "10"))          # RAG chunks retrieved per query
+GIS_CACHE_TTL_SEC = int(os.getenv("GIS_CACHE_TTL_SEC", "3600"))  # 1-hour persistent GIS cache
+AUDIT_ENABLED     = os.getenv("AUDIT_ENABLED", "true").lower() != "false"
+SEARCH_MODEL      = os.getenv("SEARCH_MODEL", "gpt-4o-mini")
+ADDRESS_MODEL     = os.getenv("ADDRESS_MODEL", "gpt-4o-mini")
+
+# ── Flask app + limiter ───────────────────────────────────────────────────────
 app = Flask(__name__)
-PDF_PATH = os.path.join(os.path.dirname(__file__), "data", "tampa-code-5-27.pdf")
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 LOGIN_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "test123")
 
-# Squared L2 distance from FAISS; tune via env if needed (lower = closer match).
-ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
 
-# Address review performance (smaller RAG + shorter model reasoning = faster API).
-ADDRESS_REVIEW_RAG_K = max(1, int(os.getenv("ADDRESS_REVIEW_RAG_K", "5")))
-# Per-chunk character cap for the model context (0 = no truncation). Cuts input latency on huge chunks.
-_cmc = os.getenv("ADDRESS_REVIEW_CHUNK_MAX_CHARS", "4500").strip()
-ADDRESS_REVIEW_CHUNK_MAX_CHARS = None if _cmc in ("", "0") else max(500, int(_cmc))
-ADDRESS_REVIEW_MODEL = os.getenv("ADDRESS_REVIEW_MODEL", "gpt-5-mini")
-ADDRESS_REVIEW_MAX_OUTPUT_TOKENS = int(os.getenv("ADDRESS_REVIEW_MAX_OUTPUT_TOKENS", "4096"))
-# For gpt-5 / o-series: lower reasoning effort speeds up responses (minimal | low | medium | high).
-ADDRESS_REVIEW_REASONING_EFFORT = os.getenv("ADDRESS_REVIEW_REASONING_EFFORT", "low").strip() or "low"
+# ── SQLite: persistent GIS cache + audit log ─────────────────────────────────
+def _db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-# Short TTL cache: browser loads GIS on address pick, then /address-review hits GIS again — reuse when coords + address match.
-_GIS_REVIEW_CACHE: dict[tuple[float, float, str], tuple[float, dict]] = {}
-GIS_REVIEW_CACHE_TTL_SEC = float(os.getenv("GIS_REVIEW_CACHE_TTL_SEC", "120"))
+
+def _init_db() -> None:
+    with _db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS gis_cache (
+                cache_key  TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts           TEXT    NOT NULL,
+                query_type   TEXT    NOT NULL,
+                question     TEXT,
+                address      TEXT,
+                zoning       TEXT,
+                result_count INTEGER,
+                error        TEXT
+            )
+        """)
+        conn.commit()
+
+
+_init_db()
+
+
+def gis_cache_get(key: str) -> dict | None:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT data, created_at FROM gis_cache WHERE cache_key = ?", (key,)
+        ).fetchone()
+    if not row:
+        return None
+    if time.time() - row["created_at"] > GIS_CACHE_TTL_SEC:
+        return None
+    return json.loads(row["data"])
+
+
+def gis_cache_set(key: str, data: dict) -> None:
+    with _db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO gis_cache (cache_key, data, created_at) VALUES (?, ?, ?)",
+            (key, json.dumps(data), time.time()),
+        )
+        conn.commit()
+
+
+def audit(query_type: str, *, question: str = None, address: str = None,
+          zoning: str = None, result_count: int = None, error: str = None) -> None:
+    if not AUDIT_ENABLED:
+        return
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO audit_log (ts, query_type, question, address, zoning, result_count, error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, query_type, question, address, zoning, result_count, error),
+            )
+            conn.commit()
+    except Exception:
+        pass  # never crash the request over a log write
 
 
 def build_address_query(
@@ -99,85 +177,43 @@ def build_address_query(
     return " ".join(merged)
 
 
-def _gis_cache_store(address: str, ctx: dict) -> None:
-    """So /address-review can skip a second full GIS round-trip right after property context loads."""
-    x, y = ctx.get("x"), ctx.get("y")
-    if x is None or y is None:
-        return
-    addr_key = (address or "").strip().lower()
-    key = (round(float(x), 4), round(float(y), 4), addr_key)
-    _GIS_REVIEW_CACHE[key] = (time.time(), ctx)
-
-
-def _property_context_for_address_review(address: str, x: float, y: float) -> dict:
-    """Same as get_tampa_property_context but avoids duplicate ArcGIS round-trips after autocomplete."""
-    addr_key = (address or "").strip().lower()
-    key = (round(float(x), 4), round(float(y), 4), addr_key)
-    now = time.time()
-    hit = _GIS_REVIEW_CACHE.get(key)
-    if hit and now - hit[0] < GIS_REVIEW_CACHE_TTL_SEC:
-        return hit[1]
-    ctx = get_tampa_property_context(address=address, x=x, y=y)
-    _GIS_REVIEW_CACHE[key] = (now, ctx)
-    return ctx
-
-
-def _format_context(results: list, max_chunk_chars: int | None = None) -> str:
+def _format_context(results: list) -> str:
     context_blocks = []
     for r in results:
-        text = r["text"]
-        if max_chunk_chars and len(text) > max_chunk_chars:
-            text = text[:max_chunk_chars].rstrip() + "\n[… truncated for speed; see PDF for full section.]"
-        context_blocks.append(f"[Page {r['page']} | {r['chunk_id']}]\n{text}")
+        context_blocks.append(f"[Page {r['page']} | {r['chunk_id']}]\n{r['text']}")
     return "\n\n".join(context_blocks)
 
 
-def _responses_stream_kwargs_address(model: str, prompt: str) -> dict:
-    """Tuned for latency: cap output size; reduce reasoning depth on gpt-5 family."""
-    kwargs: dict = {
-        "model": model,
-        "input": prompt,
-        "max_output_tokens": ADDRESS_REVIEW_MAX_OUTPUT_TOKENS,
-    }
-    if model.startswith(("gpt-5", "o")) and ADDRESS_REVIEW_REASONING_EFFORT != "none":
-        kwargs["reasoning"] = {"effort": ADDRESS_REVIEW_REASONING_EFFORT}
-    return kwargs
-
-
-def build_prompt(question: str):
-    """RAG prompt for the Search tab; same string is used for embedding search and LLM question text."""
-    q = (question or "").strip()
-    results = search(q, k=5)
-    prompt = _compose_prompt(q, results, mode="ask")
+def build_prompt(search_query: str, display_question: str):
+    raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
+    results = [dict(r, distance=round(d, 4)) for r, d in zip(raw_results, distances)]
+    prompt = _compose_prompt(display_question, results, mode="ask")
     return prompt, results
 
 
-def _compose_prompt(
-    display_question: str,
-    results: list,
-    mode: str,
-    *,
-    max_chunk_chars: int | None = None,
-) -> str:
-    context = _format_context(results, max_chunk_chars=max_chunk_chars)
+def _compose_prompt(display_question: str, results: list, mode: str) -> str:
+    context = _format_context(results)
     if mode == "address":
         return f"""You are a zoning and land use reviewer.
 
-Extract ONLY explicit code requirements.
+Extract ONLY explicit code requirements from the provided excerpts.
 
-Return in this format:
+Return your answer as a JSON array and nothing else — no prose before or after.
+Each element must have exactly these fields:
+  "name"  — the requirement name (string)
+  "value" — the requirement value (string)
+  "page"  — the page number where it appears (integer)
 
-- Requirement name: value (page X)
-- Requirement name: value (page X)
+Example output:
+[
+  {{"name": "Minimum front setback", "value": "25 feet", "page": 42}},
+  {{"name": "Maximum building height", "value": "35 feet", "page": 44}}
+]
 
-If something is not found, say:
-"I could not confirm that from the indexed code excerpts."
+If a requirement is not found in the excerpts, omit it entirely — do not include a placeholder row.
+If nothing relevant is found at all, return an empty array: []
 
-DO NOT summarize.
-DO NOT explain.
-ONLY extract requirements.
-
-Use ONLY the provided code excerpts below. If a requirement is not clearly stated in the excerpts, use the not-found line above for that item.
+Use ONLY the provided code excerpts below.
 
 Task:
 {display_question}
@@ -203,42 +239,69 @@ Context:
 
 def build_address_prompt(search_query: str, display_question: str):
     """
-    RAG prompt for address review with relevance check on the best FAISS hit.
-    Returns (prompt, results) or (None, None) with failure reason for callers.
+    RAG prompt for address review.
+    Returns (prompt, results, error) — results carry a 'distance' field for confidence display.
     """
-    results, distances = search_with_distances(search_query, k=ADDRESS_REVIEW_RAG_K)
-    if not results or not distances:
+    raw_results, distances = search_with_distances(search_query, k=SEARCH_K)
+    if not raw_results or not distances:
         return None, None, "Unable to find relevant code sections for this request."
     if distances[0] > ADDRESS_SEARCH_MAX_DISTANCE:
         return None, None, "Unable to find relevant code sections for this request."
-    prompt = _compose_prompt(
-        display_question,
-        results,
-        mode="address",
-        max_chunk_chars=ADDRESS_REVIEW_CHUNK_MAX_CHARS,
-    )
+    results = [dict(r, distance=round(d, 4)) for r, d in zip(raw_results, distances)]
+    prompt = _compose_prompt(display_question, results, mode="address")
     return prompt, results, None
 
 
+# Regex fallback — handles dash/bullet, p./pg./page, and page ranges like (pages 5–7).
 _REQ_LINE = re.compile(
-    r"^\s*-\s*(?P<name>.+?):\s*(?P<value>.+?)\s*\(\s*page\s+(?P<page>\d+)\s*\)\s*$",
+    r"^\s*[-•*]\s*(?P<name>[^:\n]+?):\s*(?P<value>[^\n]+?)\s*"
+    r"\(\s*p(?:ages?|gs?)?\.?\s*(?P<page>\d+)(?:\s*[-–]\s*\d+)?\s*\)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
 
 def parse_requirements(raw_text: str) -> list:
-    """Parse '- Name: value (page N)' lines into structured requirements."""
+    """
+    Parse structured requirements from the model's output.
+
+    Primary:  JSON array  [{"name":..., "value":..., "page":...}, ...]
+    Fallback: dash-list   - Name: value (page N)
+    """
+    text = (raw_text or "").strip()
+
+    # ── Primary: JSON array ──────────────────────────────────────────────────
+    try:
+        start = text.find("[")
+        end   = text.rfind("]") + 1
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end])
+            if isinstance(data, list):
+                out = []
+                for r in data:
+                    try:
+                        out.append({
+                            "name":  str(r["name"]).strip(),
+                            "value": str(r["value"]).strip(),
+                            "page":  int(r["page"]),
+                        })
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                if out:
+                    return out
+    except (ValueError, TypeError):
+        pass
+
+    # ── Fallback: regex dash-list ────────────────────────────────────────────
     out = []
-    for m in _REQ_LINE.finditer(raw_text or ""):
+    for m in _REQ_LINE.finditer(text):
         try:
-            page = int(m.group("page"))
-        except ValueError:
+            out.append({
+                "name":  m.group("name").strip(),
+                "value": m.group("value").strip(),
+                "page":  int(m.group("page")),
+            })
+        except (ValueError, AttributeError):
             continue
-        out.append({
-            "name": m.group("name").strip(),
-            "value": m.group("value").strip(),
-            "page": page,
-        })
     return out
 
 
@@ -513,6 +576,16 @@ HTML = """
       padding: 14px;
       margin-top: 12px;
     }
+    .confidence-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 99px;
+      margin-left: 8px;
+      vertical-align: middle;
+      letter-spacing: 0.03em;
+    }
     .meta {
       font-weight: 700;
       margin-bottom: 8px;
@@ -775,10 +848,14 @@ HTML = """
                 linkifyPageNumbers(answerEl);
 
                 msg.results.forEach((r) => {
+                  const conf = confidenceBadge(r.distance);
                   const div = document.createElement("div");
                   div.className = "chunk";
                   div.innerHTML = `
-                    <div class="meta"><span class="page-link" data-page="${r.page}">Page ${r.page}</span> | ${r.chunk_id}</div>
+                    <div class="meta">
+                      <span class="page-link" data-page="${r.page}">Page ${r.page}</span> | ${r.chunk_id}
+                      ${conf ? `<span class="confidence-badge" style="background:${conf.bg};color:${conf.fg};">${conf.label}</span>` : ""}
+                    </div>
                     <div>${escapeHtml((r.text || "").slice(0, 1500))}</div>
                   `;
                   div.querySelector(".page-link").addEventListener("click", () => goToPdfPage(r.page));
@@ -802,6 +879,15 @@ HTML = """
         submitBtn.textContent = "Run Test";
       }
     });
+
+    function confidenceBadge(dist) {
+      if (dist === undefined || dist === null) return null;
+      if (dist < 0.3) return { label: "Very High", bg: "#dcfce7", fg: "#166534" };
+      if (dist < 0.6) return { label: "High",      bg: "#dbeafe", fg: "#1e40af" };
+      if (dist < 1.0) return { label: "Moderate",  bg: "#fef9c3", fg: "#854d0e" };
+      if (dist < 1.5) return { label: "Low",       bg: "#ffedd5", fg: "#9a3412" };
+      return                 { label: "Weak",       bg: "#fee2e2", fg: "#991b1b" };
+    }
 
     function escapeHtml(text) {
       const div = document.createElement("div");
@@ -1183,7 +1269,8 @@ def api_address_suggest():
 
 @app.route("/api/property-context", methods=["POST"])
 def api_property_context():
-    """Resolve zoning, overlays, folio, and city limits from Tampa GIS (no LLM)."""
+    """Resolve zoning, overlays, folio, and city limits from Tampa GIS (no LLM).
+    Results are cached in SQLite for GIS_CACHE_TTL_SEC seconds."""
     if not session.get("authenticated"):
         return jsonify({"error": "Unauthorized"}), 401
     data = request.get_json(silent=True) or {}
@@ -1196,6 +1283,12 @@ def api_property_context():
         yf = float(y) if y is not None else None
     except (TypeError, ValueError):
         xf = yf = None
+
+    cache_key = f"{address.lower()}|{round(xf or 0, 4)}|{round(yf or 0, 4)}"
+    cached = gis_cache_get(cache_key)
+    if cached:
+        return jsonify(cached)
+
     try:
         ctx = get_tampa_property_context(
             address=address,
@@ -1205,7 +1298,8 @@ def api_property_context():
         )
     except Exception as e:
         return jsonify({"error": "GIS lookup failed.", "detail": str(e)}), 502
-    _gis_cache_store(address, ctx)
+
+    gis_cache_set(cache_key, ctx)
     return jsonify(ctx)
 
 
@@ -1217,6 +1311,7 @@ def home():
 
 
 @app.route("/ask", methods=["POST"])
+@limiter.limit("60 per hour; 10 per minute")
 def ask():
     if not session.get("authenticated"):
         return jsonify({"error": "Unauthorized"}), 401
@@ -1227,12 +1322,13 @@ def ask():
     if not question:
         return jsonify({"error": "Missing question"}), 400
 
-    prompt, results = build_prompt(question)
+    prompt, results = build_prompt(question, question)
+    audit("search", question=question, result_count=len(results))
 
     def generate():
         try:
             with client.responses.stream(
-                model="gpt-5-mini",
+                model=SEARCH_MODEL,
                 input=prompt
             ) as stream:
                 for event in stream:
@@ -1248,6 +1344,7 @@ def ask():
             }) + "\n"
 
         except Exception as e:
+            audit("search", question=question, error=str(e))
             yield json.dumps({
                 "type": "error",
                 "text": str(e)
@@ -1256,6 +1353,7 @@ def ask():
     return Response(generate(), mimetype="text/plain")
 
 @app.route("/address-review", methods=["POST"])
+@limiter.limit("30 per hour; 5 per minute")
 def address_review():
     if not session.get("authenticated"):
         return jsonify({"error": "Unauthorized"}), 401
@@ -1277,10 +1375,14 @@ def address_review():
             "error": "Property location required. Select an address and load property context from Tampa GIS first.",
         }), 400
 
-    try:
-        ctx = _property_context_for_address_review(address=address, x=x, y=y)
-    except Exception as e:
-        return jsonify({"error": "Could not verify property with Tampa GIS.", "detail": str(e)}), 502
+    cache_key = f"{address.lower()}|{round(x, 4)}|{round(y, 4)}"
+    ctx = gis_cache_get(cache_key)
+    if ctx is None:
+        try:
+            ctx = get_tampa_property_context(address=address, x=x, y=y)
+            gis_cache_set(cache_key, ctx)
+        except Exception as e:
+            return jsonify({"error": "Could not verify property with Tampa GIS.", "detail": str(e)}), 502
 
     if ctx.get("error"):
         return jsonify({"error": ctx["error"]}), 400
@@ -1309,6 +1411,9 @@ Project description: {project_description or "(not specified)"}
 Extract explicit code requirements that apply to this scenario from the excerpts (dimensional standards, setbacks, height, parking, lot size, and any other requirements clearly stated in the excerpts)."""
 
     prompt, results, prep_error = build_address_prompt(search_query, display_question)
+    audit("address_review", address=normalized, zoning=zoning,
+          result_count=len(results) if results else 0,
+          error=prep_error)
 
     def generate():
         if prep_error:
@@ -1335,7 +1440,8 @@ Extract explicit code requirements that apply to this scenario from the excerpts
 
             full_text = []
             with client.responses.stream(
-                **_responses_stream_kwargs_address(ADDRESS_REVIEW_MODEL, prompt)
+                model=ADDRESS_MODEL,
+                input=prompt
             ) as stream:
                 for event in stream:
                     if event.type == "response.output_text.delta":
@@ -1353,6 +1459,7 @@ Extract explicit code requirements that apply to this scenario from the excerpts
             }) + "\n"
 
         except Exception as e:
+            audit("address_review", address=normalized, zoning=zoning, error=str(e))
             yield json.dumps({"type": "error", "text": str(e)}) + "\n"
 
     return Response(generate(), mimetype="text/plain")

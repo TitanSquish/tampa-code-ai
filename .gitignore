@@ -57,9 +57,9 @@ desktop.ini
 *.log
 *.tmp
 
-# Generated database files (rebuilt by ingest.py)
-chunks.json
-*.index
+# SQLite index (runtime data)
+# Note: tampa_code.index and chunks.json are committed — required for Render deploy
+# since ingest.py cannot run there (PDFs not committed, would cost OpenAI credits)
 
 # Frontend build artifacts and dependencies
 node_modules/

@@ -12,8 +12,9 @@ load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 PDFS = [
-    {"path": "data/tampa-code-5-27.pdf",             "source": "tampa_code_5_27"},
-    {"path": "data/csd-sufficiency-checklist_1.pdf", "source": "csd_sufficiency_checklist"},
+    {"path": "data/tampa-code-5-27.pdf",                  "source": "tampa_code_5_27"},
+    {"path": "data/csd-sufficiency-checklist_1.pdf",      "source": "csd_sufficiency_checklist"},
+    {"path": "data/tampa-code-22-11-21-28-6-19-17.pdf",   "source": "tampa_code_22_11_21_28_6_19_17"},
 ]
 INDEX_PATH = "tampa_code.index"
 CHUNKS_PATH = "chunks.json"
@@ -47,7 +48,7 @@ def extract_pages(pdf_path: str):
 
 
 def split_into_sections(page_text: str):
-    pattern = r'(?=(Sec\.\s*(?:5|27)-[\w\.-]+\s*\.))'
+    pattern = r'(?=(Sec\.\s*\d+-[\w\.-]+\s*\.))'
     parts = re.split(pattern, page_text)
 
     sections = []
@@ -94,12 +95,12 @@ def chunk_long_text(text: str, max_chars=MAX_CHARS, overlap=OVERLAP):
 
 
 def get_section_id(text: str):
-    match = re.search(r'Sec\.\s*((?:5|27)-[\w\.-]+)', text)
+    match = re.search(r'Sec\.\s*(\d+-[\w\.-]+)', text)
     return match.group(1) if match else None
 
 
 def get_chapter(text: str):
-    match = re.search(r'Sec\.\s*((5|27)-[\w\.-]+)', text)
+    match = re.search(r'Sec\.\s*((\d+)-[\w\.-]+)', text)
     if match:
         return match.group(2)
     return None

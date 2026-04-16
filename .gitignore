@@ -56,3 +56,19 @@ desktop.ini
 # Logs and local scratch
 *.log
 *.tmp
+
+# Generated database files (rebuilt by ingest.py)
+chunks.json
+*.index
+
+# SQLite databases (runtime data)
+*.db
+
+# Large source PDFs (not committed to repo)
+data/*.pdf
+
+# Generated parse outputs
+data/parsed_chunks.json
+data/parsed_chunks.jsonl
+.claude
+.agents

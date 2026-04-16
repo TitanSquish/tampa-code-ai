@@ -29,7 +29,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Requests from the Vite dev server to `/api/*`, `/ask`, and `/address-review` reach the Flask backend without CORS configuration
   4. `frontend/.env` exposes `VITE_API_BASE_URL` and the frontend uses it to switch between dev and prod API origins
   5. Root `README.md` documents the monorepo layout, how to run backend and frontend locally, and the required env vars
-**Plans**: TBD
+**Plans:** 3 plans
+Plans:
+- [ ] 01-01-PLAN.md — Move backend Python/config files to `backend/` via `git mv`; create `backend/.env.example`; update root `.gitignore`
+- [ ] 01-02-PLAN.md — Scaffold `frontend/` with Vite + React + TS + Tailwind v4 + shadcn/ui + React Router v7; wire Vite dev proxy to Flask on :5000; expose `VITE_API_BASE_URL`
+- [ ] 01-03-PLAN.md — Write root `README.md` (monorepo layout, env vars, dev/prod commands); add root `package.json` with `concurrently` for `npm run dev`
 **UI hint**: yes
 
 ### Phase 2: Email OTP Authentication
@@ -73,7 +77,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Monorepo Restructure & Frontend Scaffold | 0/TBD | Not started | - |
+| 1. Monorepo Restructure & Frontend Scaffold | 0/3 | Not started | - |
 | 2. Email OTP Authentication | 0/TBD | Not started | - |
 | 3. React UI Port | 0/TBD | Not started | - |
 | 4. Render Two-Service Deployment | 0/TBD | Not started | - |

@@ -65,10 +65,15 @@ chunks.json
 *.db
 
 # Large source PDFs (not committed to repo)
-data/*.pdf
+**/data/*.pdf
 
 # Generated parse outputs
-data/parsed_chunks.json
-data/parsed_chunks.jsonl
+**/data/parsed_chunks.json
+**/data/parsed_chunks.jsonl
 .claude
 .agents
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/

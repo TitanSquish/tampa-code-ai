@@ -83,8 +83,14 @@ Items acknowledged and carried forward from previous milestone close:
 |----------|------|--------|-------------|
 | *(none)* | | | |
 
+## Quick Tasks Completed
+
+| Date | Task | Slug |
+|------|------|------|
+| 2026-04-16 | Copy pre-built FAISS index + chunks to backend/ so search.py loads on startup | copy-index-chunks-to-backend |
+
 ## Session Continuity
 
-Last session: 2026-04-16T22:34:33.318Z
-Stopped at: Phase 1 UI-SPEC approved
+Last session: 2026-04-16T23:44:46.494Z
+Stopped at: Phase 1 complete; data files restored to backend/
 Resume file: .planning/phases/01-monorepo-restructure-frontend-scaffold/01-UI-SPEC.md

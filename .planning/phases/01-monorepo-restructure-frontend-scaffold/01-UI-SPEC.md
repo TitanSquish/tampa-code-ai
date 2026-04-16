@@ -77,13 +77,13 @@ Exceptions:
 | Body | 15px | 400 (regular) | 1.5 | Answer text, form labels, paragraph content |
 | Label | 13px | 500 (medium) | 1.4 | Form field labels, badge text, metadata, muted notes |
 | Heading | 20px | 600 (semibold) | 1.25 | Page section headings, card titles, tab panel headings |
-| Display | 28px | 700 (bold) | 1.15 | Auth page title ("Tampa Code AI"), login page header only |
+| Display | 28px | 600 (semibold) | 1.15 | Auth page title ("Tampa Code AI"), login page header only |
 
 **Font stack:** `"Geist", ui-sans-serif, system-ui, sans-serif`
 
 **Rationale:** Geist is designed for product UIs. It reads clean at 13–15px, avoids the Inter/DM Sans monoculture, and has a civic-professional quality that suits a permit assistant. Not in the reflex reject list.
 
-**Weights in use:** Exactly 2 weights — regular (400) for body and label, semibold (600) for headings. Bold (700) used only for the display role on the login page. Phase 3 must not introduce additional weights.
+**Weights in use:** Exactly 2 weights — regular (400) for body and label, semibold (600) for headings and display. Phase 3 must not introduce additional weights.
 
 **Line length cap:** Body text areas must have `max-width: 72ch` to prevent fatigue on wide viewports.
 
@@ -176,7 +176,7 @@ Phase 1 must render a minimal app shell that proves routing works and gives Phas
 **Layout:** Centered single-column, max-width 400px, vertically centered on viewport.
 
 **Elements (placeholder):**
-1. App name: "Tampa Code AI" — Display typography (28px, bold)
+1. App name: "Tampa Code AI" — Display typography (28px, semibold)
 2. Tagline: "Tampa building permit code assistant" — Label typography, muted color
 3. Email input with label "Email address" — full width, shadcn `<Input>`
 4. Continue button: "Continue with Email" — full width, shadcn `<Button variant="default">`

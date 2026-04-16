@@ -1,0 +1,12 @@
+{
+  "name": "tampa-code-ai",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tampa Code AI — monorepo root. Runs backend (Flask) and frontend (Vite) in parallel for local development.",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"cd backend && python -m flask --app code_website run --port 5000\" \"cd frontend && npm run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

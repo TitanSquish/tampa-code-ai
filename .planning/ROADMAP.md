@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Root `README.md` documents the monorepo layout, how to run backend and frontend locally, and the required env vars
 **Plans:** 3 plans
 Plans:
-- [ ] 01-01-PLAN.md — Move backend Python/config files to `backend/` via `git mv`; create `backend/.env.example`; update root `.gitignore`
-- [ ] 01-02-PLAN.md — Scaffold `frontend/` with Vite + React + TS + Tailwind v4 + shadcn/ui + React Router v7; wire Vite dev proxy to Flask on :5000; expose `VITE_API_BASE_URL`
-- [ ] 01-03-PLAN.md — Write root `README.md` (monorepo layout, env vars, dev/prod commands); add root `package.json` with `concurrently` for `npm run dev`
+- [x] 01-01-PLAN.md — Move backend Python/config files to `backend/` via `git mv`; create `backend/.env.example`; update root `.gitignore`
+- [x] 01-02-PLAN.md — Scaffold `frontend/` with Vite + React + TS + Tailwind v4 + shadcn/ui + React Router v7; wire Vite dev proxy to Flask on :5000; expose `VITE_API_BASE_URL`
+- [x] 01-03-PLAN.md — Write root `README.md` (monorepo layout, env vars, dev/prod commands); add root `package.json` with `concurrently` for `npm run dev`
 **UI hint**: yes
 
 ### Phase 2: Email OTP Authentication

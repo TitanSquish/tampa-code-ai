@@ -61,6 +61,11 @@ desktop.ini
 chunks.json
 *.index
 
+# Frontend build artifacts and dependencies
+node_modules/
+frontend/dist/
+frontend/.vite/
+
 # SQLite databases (runtime data)
 *.db
 

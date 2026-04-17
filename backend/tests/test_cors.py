@@ -16,6 +16,7 @@ def client(tmp_path, monkeypatch, mock_resend_send):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "cors_test.db"))
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret")
     monkeypatch.setenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    monkeypatch.setenv("SERVE_FRONTEND", "false")
     if "code_website" in sys.modules:
         del sys.modules["code_website"]
     import code_website

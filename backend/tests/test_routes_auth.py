@@ -19,6 +19,7 @@ def app_with_tmp_db(tmp_path, monkeypatch, mock_resend_send):
     monkeypatch.setenv("DB_PATH", db_path)
     monkeypatch.setenv("FLASK_SECRET_KEY", "test-secret-key")
     monkeypatch.setenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    monkeypatch.setenv("SERVE_FRONTEND", "false")
 
     if "code_website" in sys.modules:
         del sys.modules["code_website"]

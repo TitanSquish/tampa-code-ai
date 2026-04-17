@@ -1,4 +1,4 @@
-from flask import Flask, request, session, Response, jsonify, send_file
+from flask import Flask, request, session, Response, jsonify, send_file, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from search import search_with_distances
@@ -23,8 +23,14 @@ load_dotenv()
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 _BASE = os.path.dirname(__file__)
+_REPO_ROOT = os.path.abspath(os.path.join(_BASE, ".."))
 PDF_PATH  = os.path.join(_BASE, "data", "tampa-code-5-27.pdf")
 DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
+FRONTEND_DIST_PATH = os.getenv(
+    "FRONTEND_DIST_PATH",
+    os.path.join(_REPO_ROOT, "frontend", "dist"),
+)
+SERVE_FRONTEND = os.getenv("SERVE_FRONTEND", "true").lower() != "false"
 
 # ── Config (all overridable via environment variables) ───────────────────────
 ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
@@ -1853,6 +1859,33 @@ Extract explicit code requirements that apply to this scenario from the excerpts
             yield json.dumps({"type": "error", "text": str(e)}) + "\n"
 
     return Response(generate(), mimetype="text/plain")
+
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_frontend(path: str):
+    """Serve built React SPA when running as a single Render web service."""
+    if not SERVE_FRONTEND:
+        return jsonify({"error": "Not found"}), 404
+
+    if not os.path.isdir(FRONTEND_DIST_PATH):
+        return jsonify({"error": "Frontend build not found"}), 404
+
+    # Keep API and backend-owned route namespaces from falling through to the SPA.
+    if (
+        path.startswith("api/")
+        or path in {"ask", "address-review", "pdf"}
+    ):
+        return jsonify({"error": "Not found"}), 404
+
+    candidate = os.path.join(FRONTEND_DIST_PATH, path) if path else None
+    if path and os.path.isfile(candidate):
+        return send_from_directory(FRONTEND_DIST_PATH, path)
+
+    index_file = os.path.join(FRONTEND_DIST_PATH, "index.html")
+    if os.path.isfile(index_file):
+        return send_from_directory(FRONTEND_DIST_PATH, "index.html")
+    return jsonify({"error": "Not found"}), 404
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

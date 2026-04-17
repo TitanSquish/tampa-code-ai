@@ -29,10 +29,10 @@ DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
 SERVE_FRONTEND = os.getenv("SERVE_FRONTEND", "true").lower() != "false"
 
 
-def _resolve_frontend_dist_path() -> str:
+def _resolve_frontend_dist_path() -> tuple[str, list[str]]:
     explicit = os.getenv("FRONTEND_DIST_PATH")
     if explicit:
-        return explicit
+        return explicit, [explicit]
 
     candidates = [
         os.path.join(_BASE, "dist"),
@@ -40,13 +40,26 @@ def _resolve_frontend_dist_path() -> str:
         os.path.join(_REPO_ROOT, "frontend", "dist"),
         os.path.abspath(os.path.join(_BASE, "..", "frontend", "dist")),
     ]
+
+    # Render path variants observed across rootDir/service configs.
+    render_root = os.getenv("RENDER_PROJECT_ROOT", "/opt/render/project/src")
+    candidates.extend(
+        [
+            os.path.join(render_root, "backend", "dist"),
+            os.path.join(render_root, "frontend", "dist"),
+            os.path.join(render_root, "dist"),
+        ]
+    )
+
+    checked = []
     for candidate in candidates:
+        checked.append(candidate)
         if os.path.isdir(candidate):
-            return candidate
-    return candidates[0]
+            return candidate, checked
+    return candidates[0], checked
 
 
-FRONTEND_DIST_PATH = _resolve_frontend_dist_path()
+FRONTEND_DIST_PATH, FRONTEND_DIST_PATH_CANDIDATES = _resolve_frontend_dist_path()
 
 # ── Config (all overridable via environment variables) ───────────────────────
 ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))
@@ -72,6 +85,13 @@ limiter = Limiter(
 )
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+app.logger.info(
+    "Frontend dist resolved path=%s exists=%s cwd=%s checked=%s",
+    FRONTEND_DIST_PATH,
+    os.path.isdir(FRONTEND_DIST_PATH),
+    os.getcwd(),
+    FRONTEND_DIST_PATH_CANDIDATES,
+)
 SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 SESSION_COOKIE_SECURE = (
     os.getenv("FLASK_ENV") == "production"
@@ -1885,7 +1905,12 @@ def serve_frontend(path: str):
         return jsonify({"error": "Not found"}), 404
 
     if not os.path.isdir(FRONTEND_DIST_PATH):
-        return jsonify({"error": "Frontend build not found"}), 404
+        return jsonify(
+            {
+                "error": "Frontend build not found",
+                "resolved_dist_path": FRONTEND_DIST_PATH,
+            }
+        ), 404
 
     # Keep API and backend-owned route namespaces from falling through to the SPA.
     if (

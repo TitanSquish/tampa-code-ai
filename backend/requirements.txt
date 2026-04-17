@@ -1,5 +1,6 @@
 flask
 flask-limiter
+flask-cors
 requests
 openai
 python-dotenv
@@ -7,3 +8,4 @@ faiss-cpu
 pymupdf
 numpy
 gunicorn
+resend

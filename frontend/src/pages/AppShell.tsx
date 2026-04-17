@@ -74,6 +74,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   const [theme, setTheme] = useState<Theme>(() => readThemePreference())
   const [signingOut, setSigningOut] = useState(false)
   const [activeTab, setActiveTab] = useState("code-search")
+  const [activePdf, setActivePdf] = useState<"pdf1" | "pdf2">("pdf1")
 
   const [question, setQuestion] = useState("")
   const [searchLoading, setSearchLoading] = useState(false)
@@ -440,11 +441,26 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
               Tampa Code
             </button>
           </nav>
-          <div className="flex-1 overflow-hidden rounded-xl border border-border bg-card">
+          <div className="flex flex-1 overflow-hidden flex-col rounded-xl border border-border bg-card">
+            <div className="shrink-0 flex gap-1 border-b border-border px-3 py-2">
+              <button
+                onClick={() => setActivePdf("pdf1")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${activePdf === "pdf1" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50"}`}
+              >
+                Tampa Code (22-11-21-28-6-19-17)
+              </button>
+              <button
+                onClick={() => setActivePdf("pdf2")}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${activePdf === "pdf2" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50"}`}
+              >
+                Tampa Code (5-27)
+              </button>
+            </div>
             <iframe
-              src={apiUrl("/pdf")}
+              key={activePdf}
+              src={apiUrl(activePdf === "pdf1" ? "/pdf" : "/pdf2")}
               title="Tampa Code of Ordinances"
-              className="w-full h-full border-0 block"
+              className="w-full flex-1 border-0 block"
             />
           </div>
         </div>

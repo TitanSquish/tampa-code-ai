@@ -25,6 +25,7 @@ load_dotenv()
 _BASE = os.path.dirname(__file__)
 _REPO_ROOT = os.path.abspath(os.path.join(_BASE, ".."))
 PDF_PATH  = os.path.join(_REPO_ROOT, "data", "tampa-code-22-11-21-28-6-19-17.pdf")
+PDF_PATH_2 = os.path.join(_REPO_ROOT, "data", "tampa-code-5-27.pdf")
 DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
 SERVE_FRONTEND = os.getenv("SERVE_FRONTEND", "true").lower() != "false"
 
@@ -1606,6 +1607,15 @@ def serve_pdf():
     if not os.path.exists(PDF_PATH):
         return jsonify({"error": "PDF not found"}), 404
     return send_file(PDF_PATH, mimetype="application/pdf", as_attachment=False)
+
+
+@app.route("/pdf2")
+def serve_pdf2():
+    if not session.get("authenticated"):
+        return jsonify({"error": "Unauthorized"}), 401
+    if not os.path.exists(PDF_PATH_2):
+        return jsonify({"error": "PDF not found"}), 404
+    return send_file(PDF_PATH_2, mimetype="application/pdf", as_attachment=False)
 
 
 @app.route("/api/address-suggest", methods=["GET"])

@@ -28,6 +28,10 @@ export default defineConfig({
         target: "http://localhost:5000",
         changeOrigin: true,
       },
+      "/pdf2": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+      },
     },
   },
 })

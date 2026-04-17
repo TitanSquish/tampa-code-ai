@@ -71,6 +71,8 @@ frontend/.vite/
 
 # Large source PDFs (not committed to repo)
 **/data/*.pdf
+!data/tampa-code-22-11-21-28-6-19-17.pdf
+!data/tampa-code-5-27.pdf
 
 # Generated parse outputs
 **/data/parsed_chunks.json

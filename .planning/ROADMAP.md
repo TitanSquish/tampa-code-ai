@@ -46,6 +46,11 @@ Plans:
   3. OTP codes become invalid after 10 minutes or after a single successful verification, whichever comes first
   4. Authenticated users can log out via an endpoint that clears the session cookie
   5. Existing protected routes (`/ask`, `/address-review`, `/api/property-context`, `/api/feedback`, `/api/address-suggest`) return HTTP 401 when the session cookie is missing or invalid
+**Plans:** 3 plans
+Plans:
+- [ ] 02-01-PLAN.md - Scaffold deps (resend, flask-cors) + env vars (RESEND_API_KEY, RESEND_FROM_EMAIL, FRONTEND_ORIGIN) + pytest.ini + requirements-dev.txt
+- [ ] 02-02-PLAN.md - Create backend/auth_otp.py OTP primitives (generate/verify/send) + tests/conftest.py + unit tests
+- [ ] 02-03-PLAN.md - Wire /api/auth/* routes + CORS + session hardening into code_website.py; delete legacy /login, /logout, / routes; fix /pdf; integration tests
 
 ### Phase 3: React UI Port
 **Goal**: The React frontend fully replaces the inlined HTML/JS UI, delivering the login flow, both tabs (Code Search and Address Review), streaming answers, source citations, property context, CSV export, and feedback — all built with shadcn/ui.
@@ -78,6 +83,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Monorepo Restructure & Frontend Scaffold | 0/3 | Not started | - |
-| 2. Email OTP Authentication | 0/TBD | Not started | - |
+| 2. Email OTP Authentication | 0/3 | Not started | - |
 | 3. React UI Port | 0/TBD | Not started | - |
 | 4. Render Two-Service Deployment | 0/TBD | Not started | - |

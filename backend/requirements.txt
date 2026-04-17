@@ -7,3 +7,5 @@ faiss-cpu
 pymupdf
 numpy
 gunicorn
+resend
+flask-cors

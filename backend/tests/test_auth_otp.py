@@ -24,7 +24,7 @@ from auth_otp import (
 @pytest.mark.parametrize("email", [
     "a@b.co",
     "user.name+tag@example.com",
-    "victor@tampacodeai.com",
+    "victorborden@permitiq.pro",
 ])
 def test_is_valid_email_accepts_valid(email):
     assert is_valid_email(email) is True

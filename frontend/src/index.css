@@ -48,12 +48,36 @@
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
 }
 
+.dark {
+  --background:        oklch(0.17  0.010 252);
+  --foreground:        oklch(0.94  0.008 250);
+  --card:              oklch(0.22  0.012 252);
+  --card-foreground:   oklch(0.94  0.008 250);
+  --popover:           oklch(0.19  0.012 252);
+  --popover-foreground: oklch(0.94 0.008 250);
+  --primary:           oklch(0.71  0.15  252);
+  --primary-foreground: oklch(0.20 0.018 252);
+  --secondary:         oklch(0.28  0.012 252);
+  --secondary-foreground: oklch(0.90 0.01 250);
+  --muted:             oklch(0.27  0.010 252);
+  --muted-foreground:  oklch(0.72  0.010 252);
+  --accent:            oklch(0.30  0.02  252);
+  --accent-foreground: oklch(0.95  0.010 252);
+  --destructive:       oklch(0.66  0.19  22);
+  --destructive-foreground: oklch(0.14 0.01 252);
+  --border:            oklch(0.33  0.010 252);
+  --input:             oklch(0.33  0.010 252);
+  --ring:              oklch(0.71  0.15  252);
+}
+
 body {
   font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.5;
   background-color: var(--background);
   color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 @theme inline {

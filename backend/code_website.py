@@ -1,16 +1,23 @@
-from flask import Flask, request, render_template_string, redirect, url_for, session, Response, jsonify, send_file
+from flask import Flask, request, session, Response, jsonify, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from search import search_with_distances
 from tampa_gis import get_tampa_property_context, suggest_tampa_addresses
+from auth_otp import (
+    generate_and_store_otp,
+    verify_and_consume_otp,
+    send_otp_email,
+    is_valid_email,
+)
 from openai import OpenAI
+from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import json
 import re
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 load_dotenv()
 
@@ -43,7 +50,31 @@ limiter = Limiter(
 )
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-this-secret")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-LOGIN_PASSWORD = os.getenv("APP_LOGIN_PASSWORD", "test123")
+SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
+SESSION_COOKIE_SECURE = (
+    os.getenv("FLASK_ENV") == "production"
+    or SESSION_COOKIE_SAMESITE.lower() == "none"
+)
+
+# ── Session cookie hardening (AUTH-05) ───────────────────────────────────────
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE=SESSION_COOKIE_SAMESITE,
+    SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+)
+
+# ── CORS (Vite dev origin; production origin added in Phase 4 per D-04) ─────
+_FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+CORS(
+    app,
+    resources={
+        r"/api/*": {"origins": [_FRONTEND_ORIGIN]},
+        r"/ask": {"origins": [_FRONTEND_ORIGIN]},
+        r"/address-review": {"origins": [_FRONTEND_ORIGIN]},
+    },
+    supports_credentials=True,
+)
 
 
 # ── SQLite: persistent GIS cache + audit log ─────────────────────────────────
@@ -84,6 +115,14 @@ def _init_db() -> None:
                 zoning         TEXT,
                 answer_snippet TEXT,
                 comment        TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS otp_codes (
+                email       TEXT PRIMARY KEY,
+                code_hash   TEXT NOT NULL,
+                expires_at  REAL NOT NULL,
+                created_at  REAL NOT NULL
             )
         """)
         conn.commit()
@@ -413,80 +452,6 @@ def parse_requirements(raw_text: str) -> list:
             continue
     return out
 
-
-LOGIN_HTML = """
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Permit Code Test Login</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #f4f7fb;
-      color: #1f2937;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 100vh;
-    }
-    .card {
-      width: 100%;
-      max-width: 420px;
-      background: white;
-      border-radius: 18px;
-      padding: 28px;
-      box-shadow: 0 12px 28px rgba(0,0,0,0.12);
-    }
-    h1 { margin-top: 0; }
-    input {
-      width: 100%;
-      padding: 12px;
-      border-radius: 12px;
-      border: 1px solid #cbd5e1;
-      font-size: 16px;
-      box-sizing: border-box;
-      margin-top: 8px;
-    }
-    button {
-      margin-top: 14px;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 12px;
-      padding: 12px 18px;
-      font-size: 16px;
-      cursor: pointer;
-      font-weight: 600;
-      width: 100%;
-    }
-    .error {
-      color: #b91c1c;
-      margin-top: 12px;
-    }
-    .muted {
-      color: #64748b;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Permit Code Test</h1>
-    <p class="muted">Enter the access password to open the reviewer test page.</p>
-    <form method="POST">
-      <label for="password"><strong>Password</strong></label>
-      <input id="password" name="password" type="password" placeholder="Enter password" />
-      <button type="submit">Log In</button>
-    </form>
-    {% if error %}<div class="error">{{ error }}</div>{% endif %}
-  </div>
-</body>
-</html>
-"""
 
 HTML = """
 <!doctype html>
@@ -1592,34 +1557,12 @@ HTML = """
 """
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if session.get("authenticated"):
-        return redirect(url_for("home"))
-
-    error = None
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        if password == LOGIN_PASSWORD:
-            session["authenticated"] = True
-            return redirect(url_for("home"))
-        error = "Incorrect password"
-
-    return render_template_string(LOGIN_HTML, error=error)
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-
 @app.route("/pdf")
 def serve_pdf():
     if not session.get("authenticated"):
-        return redirect(url_for("login"))
+        return jsonify({"error": "Unauthorized"}), 401
     if not os.path.exists(PDF_PATH):
-        return "PDF not found", 404
+        return jsonify({"error": "PDF not found"}), 404
     return send_file(PDF_PATH, mimetype="application/pdf", as_attachment=False)
 
 
@@ -1701,11 +1644,48 @@ def api_feedback():
     return jsonify({"ok": True})
 
 
-@app.route("/", methods=["GET"])
-def home():
-    if not session.get("authenticated"):
-        return redirect(url_for("login"))
-    return render_template_string(HTML, url_for=url_for)
+# ── Auth: email OTP endpoints (Phase 2 / AUTH-01..AUTH-08) ───────────────────
+@app.route("/api/auth/request-otp", methods=["POST"])
+@limiter.limit("5 per minute; 20 per hour")
+def auth_request_otp():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not is_valid_email(email):
+        return jsonify({"error": "Valid email required"}), 400
+    try:
+        code = generate_and_store_otp(email, db_getter=_db)
+        send_otp_email(email, code)
+    except Exception:
+        app.logger.exception("OTP send failed for %s", email)
+        return jsonify({"error": "Could not send code"}), 502
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/verify-otp", methods=["POST"])
+@limiter.limit("10 per minute; 40 per hour")
+def auth_verify_otp():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    code = (data.get("code") or "").strip()
+    if not email or not code:
+        return jsonify({"error": "Email and code required"}), 400
+    ok = verify_and_consume_otp(email, code, db_getter=_db)
+    if not ok:
+        return jsonify({"error": "Invalid or expired code"}), 401
+    session["authenticated"] = True
+    session.permanent = True
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/session", methods=["GET"])
+def auth_session():
+    return jsonify({"authenticated": bool(session.get("authenticated"))})
 
 
 @app.route("/ask", methods=["POST"])

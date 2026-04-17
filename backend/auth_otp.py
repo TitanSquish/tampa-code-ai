@@ -10,7 +10,7 @@ Responsibilities:
 
 Config via env vars (see backend/.env.example):
 - RESEND_API_KEY     (required at email-send time; missing key raises at send)
-- RESEND_FROM_EMAIL  (default: 'Tampa Code AI <onboarding@resend.dev>')
+- RESEND_FROM_EMAIL  (default: 'PermitIQ <onboarding@resend.dev>')
 - OTP_TTL_SEC        (default: 600 — 10 minutes per AUTH-04)
 
 Public API:
@@ -39,7 +39,7 @@ OTP_TTL_SEC = int(os.getenv("OTP_TTL_SEC", "600"))  # 10 minutes per AUTH-04
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_FROM_EMAIL = os.getenv(
     "RESEND_FROM_EMAIL",
-    "Tampa Code AI <onboarding@resend.dev>",
+    "PermitIQ <onboarding@resend.dev>",
 )
 
 # Defensive: configure the SDK only if key is present.
@@ -144,7 +144,7 @@ def send_otp_email(to_email: str, code: str) -> None:
     params = {
         "from": RESEND_FROM_EMAIL,
         "to": [to_email],
-        "subject": f"Your Tampa Code AI login code: {code}",
+        "subject": f"Your PermitIQ login code: {code}",
         "html": (
             f"<p>Your one-time login code is:</p>"
             f"<p style='font-size:24px;font-weight:bold;letter-spacing:4px'>{code}</p>"

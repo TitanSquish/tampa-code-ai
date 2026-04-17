@@ -26,11 +26,27 @@ _BASE = os.path.dirname(__file__)
 _REPO_ROOT = os.path.abspath(os.path.join(_BASE, ".."))
 PDF_PATH  = os.path.join(_BASE, "data", "tampa-code-5-27.pdf")
 DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
-FRONTEND_DIST_PATH = os.getenv(
-    "FRONTEND_DIST_PATH",
-    os.path.join(_REPO_ROOT, "frontend", "dist"),
-)
 SERVE_FRONTEND = os.getenv("SERVE_FRONTEND", "true").lower() != "false"
+
+
+def _resolve_frontend_dist_path() -> str:
+    explicit = os.getenv("FRONTEND_DIST_PATH")
+    if explicit:
+        return explicit
+
+    candidates = [
+        os.path.join(_BASE, "dist"),
+        os.path.join(_BASE, "frontend", "dist"),
+        os.path.join(_REPO_ROOT, "frontend", "dist"),
+        os.path.abspath(os.path.join(_BASE, "..", "frontend", "dist")),
+    ]
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            return candidate
+    return candidates[0]
+
+
+FRONTEND_DIST_PATH = _resolve_frontend_dist_path()
 
 # ── Config (all overridable via environment variables) ───────────────────────
 ADDRESS_SEARCH_MAX_DISTANCE = float(os.getenv("ADDRESS_SEARCH_MAX_DISTANCE", "2.5"))

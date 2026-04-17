@@ -3,7 +3,7 @@ services:
     name: tampa-code-ai-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && cd ../frontend && npm install && npm run build -- --outDir ../backend/dist
+    buildCommand: pip install -r requirements.txt && cd ../frontend && npm install --include=dev && npm run build -- --outDir ../backend/dist
     startCommand: gunicorn code_website:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
     envVars:
       - key: PYTHON_VERSION

@@ -24,7 +24,7 @@ load_dotenv()
 # ── Paths ────────────────────────────────────────────────────────────────────
 _BASE = os.path.dirname(__file__)
 _REPO_ROOT = os.path.abspath(os.path.join(_BASE, ".."))
-PDF_PATH  = os.path.join(_BASE, "data", "tampa-code-5-27.pdf")
+PDF_PATH  = os.path.join(_REPO_ROOT, "data", "tampa-code-22-11-21-28-6-19-17.pdf")
 DB_PATH   = os.getenv("DB_PATH", os.path.join(_BASE, "permitiq.db"))
 SERVE_FRONTEND = os.getenv("SERVE_FRONTEND", "true").lower() != "false"
 

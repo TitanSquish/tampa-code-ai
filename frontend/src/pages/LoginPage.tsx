@@ -1,10 +1,8 @@
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { useState } from "react"
 import { apiUrl } from "@/lib/api"
 import { applyTheme, readThemePreference, saveThemePreference, type Theme } from "@/lib/theme"
-import { Building2, Moon, ShieldCheck, Sun } from "lucide-react"
+import { Building2, Moon, Sun } from "lucide-react"
 
 type LoginPageProps = {
   onAuthenticated: () => void
@@ -16,7 +14,6 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
   const [code, setCode] = useState("")
   const [step, setStep] = useState<"request" | "verify">("request")
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState("")
   const [error, setError] = useState("")
 
   function toggleTheme() {
@@ -27,9 +24,9 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
   }
 
   async function requestOtp() {
+    if (!email.trim()) return
     setLoading(true)
     setError("")
-    setMessage("")
     try {
       const res = await fetch(apiUrl("/api/auth/request-otp"), {
         method: "POST",
@@ -43,7 +40,6 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
         return
       }
       setStep("verify")
-      setMessage("Code sent. Check your inbox and enter it below.")
     } catch {
       setError("Network error. Please try again.")
     } finally {
@@ -54,7 +50,6 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
   async function verifyOtp() {
     setLoading(true)
     setError("")
-    setMessage("")
     try {
       const res = await fetch(apiUrl("/api/auth/verify-otp"), {
         method: "POST",
@@ -75,142 +70,164 @@ export default function LoginPage({ onAuthenticated }: LoginPageProps) {
     }
   }
 
-  return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,oklch(0.97_0.03_240)_0%,transparent_42%),radial-gradient(circle_at_85%_15%,oklch(0.94_0.04_255)_0%,transparent_36%)] px-4 py-10 dark:bg-[radial-gradient(circle_at_top_left,oklch(0.24_0.03_255)_0%,transparent_44%),radial-gradient(circle_at_80%_18%,oklch(0.21_0.05_265)_0%,transparent_38%)]">
-      <div className="mx-auto grid w-full max-w-5xl gap-8 lg:grid-cols-[1.2fr_0.95fr]">
-        <section className="rounded-2xl border border-border/60 bg-card/95 p-6 shadow-sm backdrop-blur md:p-8">
-          <div className="mb-8 flex items-start justify-between gap-4">
-            <div className="space-y-3">
-              <span className="inline-flex items-center gap-2 rounded-md bg-primary/10 px-2.5 py-1 text-xs font-semibold tracking-wide text-primary">
-                <Building2 className="size-3.5" />
-                Tampa Permit Workspace
-              </span>
-              <h1 className="text-balance text-3xl font-semibold tracking-tight text-foreground md:text-4xl">
-                PermitIQ
-              </h1>
-              <p className="max-w-[60ch] text-sm leading-6 text-muted-foreground md:text-base">
-                Review zoning and permit requirements with an interface built for quick
-                decisions before project submission.
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="icon-sm"
-              onClick={toggleTheme}
-              aria-label="Toggle color theme"
-              title="Toggle color theme"
-            >
-              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
-            </Button>
-          </div>
-          <div className="grid gap-3 text-sm md:grid-cols-3">
-            <div className="rounded-xl border border-border/80 bg-background/70 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                City Context
-              </p>
-              <p className="mt-2 text-sm font-medium text-foreground">Tampa GIS + Code Base</p>
-            </div>
-            <div className="rounded-xl border border-border/80 bg-background/70 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                Response Mode
-              </p>
-              <p className="mt-2 text-sm font-medium text-foreground">
-                Streamed Requirements
-              </p>
-            </div>
-            <div className="rounded-xl border border-border/80 bg-background/70 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                Sign-In Security
-              </p>
-              <p className="mt-2 text-sm font-medium text-foreground">Email OTP Verification</p>
-            </div>
-          </div>
-        </section>
+  const form = (
+    <div className="w-full max-w-[360px]">
+      <div className="mb-7">
+        <h2 className="text-[22px] font-semibold tracking-tight text-foreground">
+          Sign in to PermitIQ
+        </h2>
+        <p className="mt-1.5 text-[13.5px] text-muted-foreground">
+          {step === "request"
+            ? "Enter the email we sent your invitation to."
+            : `We sent a 6-digit code to ${email || "your email"}.`}
+        </p>
+      </div>
 
-        <section className="rounded-2xl border border-border/70 bg-card p-6 shadow-sm md:p-7">
-          <div className="mb-6 space-y-2">
-            <h2 className="text-xl font-semibold tracking-tight text-foreground">Sign in</h2>
-            <p className="text-sm leading-6 text-muted-foreground">
-              Enter your email to receive a one-time access code.
-            </p>
-          </div>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email" className="text-xs font-semibold tracking-wide uppercase">
-                Email address
-              </Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@company.com"
-                className="h-10"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={loading || step === "verify"}
-              />
+      <div className="space-y-3.5">
+        <div>
+          <label htmlFor="login-email" className="block text-[11.5px] font-medium mb-1.5 text-foreground">
+            Email
+          </label>
+          <input
+            id="login-email"
+            type="email"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && step === "request") void requestOtp()
+            }}
+            disabled={loading || step === "verify"}
+            autoComplete="email"
+            className="w-full h-10 px-3 rounded-[8px] text-[14px] border outline-none transition-colors bg-card text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-[3px] focus:ring-ring/40 disabled:opacity-50"
+            style={{ borderColor: step === "verify" ? "var(--border)" : "var(--border-strong)" }}
+          />
+        </div>
+
+        {step === "verify" && (
+          <div>
+            <label htmlFor="login-otp" className="block text-[11.5px] font-medium mb-1.5 text-foreground">
+              One-time code
+            </label>
+            <input
+              id="login-otp"
+              inputMode="numeric"
+              maxLength={6}
+              placeholder="000000"
+              autoFocus
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && code.length >= 6) void verifyOtp()
+              }}
+              className="w-full h-11 px-3 rounded-[8px] text-[18px] font-mono tracking-[0.32em] text-center border outline-none transition-colors bg-card text-foreground focus:border-primary focus:ring-[3px] focus:ring-ring/40"
+              style={{ borderColor: "var(--border-strong)" }}
+            />
+            <div className="mt-1.5 flex items-center justify-between text-[11.5px] text-muted-foreground">
+              <span>Expires in 10:00</span>
+              <button
+                onClick={() => { setStep("request"); setCode(""); setError("") }}
+                className="hover:underline text-foreground"
+              >
+                Use a different email
+              </button>
             </div>
-            {step === "verify" && (
-              <div className="space-y-2">
-                <Label htmlFor="otp" className="text-xs font-semibold tracking-wide uppercase">
-                  One-time code
-                </Label>
-                <Input
-                  id="otp"
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="123456"
-                  className="h-10 tracking-[0.22em]"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  disabled={loading}
-                />
-              </div>
-            )}
-            {step === "request" ? (
-              <Button className="h-10 w-full font-semibold" onClick={requestOtp} disabled={loading || !email.trim()}>
-                {loading ? "Sending code..." : "Send verification code"}
-              </Button>
-            ) : (
-              <div className="space-y-2">
-                <Button className="h-10 w-full font-semibold" onClick={verifyOtp} disabled={loading || !code.trim()}>
-                  {loading ? "Verifying..." : "Verify and continue"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="h-10 w-full"
-                  onClick={() => {
-                    setStep("request")
-                    setCode("")
-                    setError("")
-                    setMessage("")
-                  }}
-                  disabled={loading}
-                >
-                  Edit email address
-                </Button>
-              </div>
-            )}
-            <p className="text-xs leading-5 text-muted-foreground">
-              {step === "request"
-                ? "You’ll receive a secure code by email."
-                : "Use the latest code from your inbox to complete sign-in."}
-            </p>
-            {message && (
-              <p className="rounded-lg bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-400">
-                {message}
-              </p>
-            )}
-            {error && (
-              <p className="rounded-lg bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">
-                {error}
-              </p>
-            )}
           </div>
-          <div className="mt-6 flex items-center gap-2 rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-xs text-muted-foreground">
-            <ShieldCheck className="size-3.5 text-primary" />
-            Secure sign-in with OTP. No passwords stored.
+        )}
+
+        {error && (
+          <div className="rounded-[8px] px-3 py-2 text-[12.5px] flex items-center gap-2 bg-destructive/10 text-destructive">
+            {error}
           </div>
-        </section>
+        )}
+
+        {step === "request" ? (
+          <Button
+            className="h-10 w-full font-semibold"
+            onClick={requestOtp}
+            disabled={loading || !email.trim()}
+          >
+            {loading ? "Sending code…" : "Send sign-in code →"}
+          </Button>
+        ) : (
+          <Button
+            className="h-10 w-full font-semibold"
+            onClick={verifyOtp}
+            disabled={loading || code.length < 6}
+          >
+            {loading ? "Verifying…" : "Verify and continue"}
+          </Button>
+        )}
+
+        <p className="text-[11.5px] pt-1 text-muted-foreground">
+          Access is limited to verified early-trial users.
+        </p>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="min-h-screen grid bg-background lg:grid-cols-[1fr_1.1fr]">
+      {/* Brand panel */}
+      <div className="hidden lg:flex flex-col justify-between p-10 border-r border-border bg-card/50">
+        {/* Logo */}
+        <div className="flex items-center gap-2.5">
+          <div className="size-8 rounded-[8px] flex items-center justify-center bg-primary text-primary-foreground shrink-0">
+            <Building2 className="size-4" />
+          </div>
+          <span className="font-semibold text-[15px] text-foreground">PermitIQ</span>
+        </div>
+
+        {/* Concentric rings mark */}
+        <div className="flex items-center justify-center flex-1">
+          <div className="relative" style={{ width: 220, height: 220 }}>
+            {([220, 160, 100] as const).map((s, i) => (
+              <div
+                key={s}
+                className="absolute rounded-full border border-border"
+                style={{
+                  width: s,
+                  height: s,
+                  top: `calc(50% - ${s / 2}px)`,
+                  left: `calc(50% - ${s / 2}px)`,
+                  opacity: 0.4 + i * 0.2,
+                }}
+              />
+            ))}
+            <div
+              className="absolute rounded-full flex items-center justify-center bg-primary text-primary-foreground"
+              style={{ width: 60, height: 60, top: "calc(50% - 30px)", left: "calc(50% - 30px)" }}
+            >
+              <Building2 className="size-6" />
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-end justify-between text-[11.5px] font-mono text-muted-foreground">
+          <span>Early trial · v0.1</span>
+          <Button variant="ghost" size="icon" onClick={toggleTheme} title="Toggle theme">
+            {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </Button>
+        </div>
+      </div>
+
+      {/* Form panel */}
+      <div className="relative flex items-center justify-center p-6 min-h-screen lg:min-h-0">
+        {/* Mobile header */}
+        <div className="lg:hidden absolute top-5 left-5 flex items-center gap-2">
+          <div className="size-7 rounded-[7px] flex items-center justify-center bg-primary text-primary-foreground">
+            <Building2 className="size-3.5" />
+          </div>
+          <span className="font-semibold text-[14px] text-foreground">PermitIQ</span>
+        </div>
+        <div className="lg:hidden absolute top-4 right-4">
+          <Button variant="ghost" size="icon" onClick={toggleTheme} title="Toggle theme">
+            {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </Button>
+        </div>
+
+        {form}
       </div>
     </div>
   )

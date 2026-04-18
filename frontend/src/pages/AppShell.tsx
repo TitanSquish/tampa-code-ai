@@ -3,7 +3,20 @@ import FlagAnswer from "@/components/FlagAnswer"
 import { useEffect, useRef, useState } from "react"
 import { apiUrl } from "@/lib/api"
 import { applyTheme, readThemePreference, saveThemePreference, type Theme } from "@/lib/theme"
-import { BookOpen, ChevronDown, FileSearch, MapPinned, Moon, Sun } from "lucide-react"
+import {
+  BookOpen,
+  Building2,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileSearch,
+  LogOut,
+  MapPin,
+  MapPinned,
+  Moon,
+  Search,
+  Sun,
+} from "lucide-react"
 
 const PERMIT_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "Select permit type..." },
@@ -30,6 +43,13 @@ const PERMIT_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "Other", label: "Other" },
 ]
 
+const SUGGESTED_QUESTIONS = [
+  "What are the setback and height requirements for an ADU?",
+  "How tall can a residential fence be in the front yard?",
+  "What's the impervious surface limit in RS-60?",
+  "Pool barrier requirements for a backyard pool",
+]
+
 type AddressSuggestion = {
   label?: string
   address?: string
@@ -51,12 +71,7 @@ type AddressRequirement = {
   name?: string
   value?: string
   page?: number | string
-}
-
-function looksLikeJsonArray(text: string): boolean {
-  const trimmed = text.trim()
-  if (!trimmed) return false
-  return trimmed.startsWith("[") || trimmed.startsWith("{")
+  severity?: string
 }
 
 type PropertyContext = {
@@ -68,6 +83,12 @@ type PropertyContext = {
   y?: number | null
   inside_city?: boolean
   error?: string | null
+}
+
+function looksLikeJsonArray(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return trimmed.startsWith("[") || trimmed.startsWith("{")
 }
 
 export default function AppShell({ onSignedOut }: AppShellProps) {
@@ -103,12 +124,24 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   const suppressNextFetchRef = useRef(false)
   const addressBoxRef = useRef<HTMLDivElement | null>(null)
 
+  // Keyboard shortcuts ⌘1/2/3
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+        if (e.key === "1") { e.preventDefault(); setActiveTab("code-search") }
+        if (e.key === "2") { e.preventDefault(); setActiveTab("address-review") }
+        if (e.key === "3") { e.preventDefault(); setActiveTab("tampa-code") }
+      }
+    }
+    document.addEventListener("keydown", handler)
+    return () => document.removeEventListener("keydown", handler)
+  }, [])
+
   useEffect(() => {
     if (suppressNextFetchRef.current) {
       suppressNextFetchRef.current = false
       return
     }
-
     const q = address.trim()
     if (q.length < 3) {
       setAddressSuggestions([])
@@ -116,7 +149,6 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
       setSuggestLoading(false)
       return
     }
-
     const controller = new AbortController()
     const timer = window.setTimeout(async () => {
       setSuggestLoading(true)
@@ -125,38 +157,25 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
           apiUrl(`/api/address-suggest?q=${encodeURIComponent(q)}`),
           { credentials: "include", signal: controller.signal },
         )
-        if (!res.ok) {
-          setAddressSuggestions([])
-          return
-        }
+        if (!res.ok) { setAddressSuggestions([]); return }
         const data = (await res.json()) as unknown
-        const list: AddressSuggestion[] = Array.isArray(data)
-          ? (data as AddressSuggestion[])
-          : []
+        const list: AddressSuggestion[] = Array.isArray(data) ? (data as AddressSuggestion[]) : []
         setAddressSuggestions(list)
         setHighlightIndex(list.length ? 0 : -1)
         setSuggestOpen(list.length > 0)
       } catch (err) {
-        if ((err as { name?: string })?.name !== "AbortError") {
-          setAddressSuggestions([])
-        }
+        if ((err as { name?: string })?.name !== "AbortError") setAddressSuggestions([])
       } finally {
         setSuggestLoading(false)
       }
     }, 180)
-
-    return () => {
-      controller.abort()
-      window.clearTimeout(timer)
-    }
+    return () => { controller.abort(); window.clearTimeout(timer) }
   }, [address])
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!addressBoxRef.current) return
-      if (!addressBoxRef.current.contains(e.target as Node)) {
-        setSuggestOpen(false)
-      }
+      if (!addressBoxRef.current.contains(e.target as Node)) setSuggestOpen(false)
     }
     document.addEventListener("mousedown", onDocClick)
     return () => document.removeEventListener("mousedown", onDocClick)
@@ -179,9 +198,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
 
   function handleAddressKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (!suggestOpen || addressSuggestions.length === 0) {
-      if (e.key === "ArrowDown" && addressSuggestions.length > 0) {
-        setSuggestOpen(true)
-      }
+      if (e.key === "ArrowDown" && addressSuggestions.length > 0) setSuggestOpen(true)
       return
     }
     if (e.key === "ArrowDown") {
@@ -189,9 +206,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
       setHighlightIndex((i) => (i + 1) % addressSuggestions.length)
     } else if (e.key === "ArrowUp") {
       e.preventDefault()
-      setHighlightIndex(
-        (i) => (i - 1 + addressSuggestions.length) % addressSuggestions.length,
-      )
+      setHighlightIndex((i) => (i - 1 + addressSuggestions.length) % addressSuggestions.length)
     } else if (e.key === "Enter") {
       if (highlightIndex >= 0 && highlightIndex < addressSuggestions.length) {
         e.preventDefault()
@@ -212,10 +227,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   async function signOut() {
     setSigningOut(true)
     try {
-      await fetch(apiUrl("/api/auth/logout"), {
-        method: "POST",
-        credentials: "include",
-      })
+      await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" })
     } finally {
       setSigningOut(false)
       onSignedOut()
@@ -226,50 +238,34 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     response: Response,
     onMessage: (msg: Record<string, unknown>) => void,
   ) {
-    if (!response.body) {
-      throw new Error("No response stream available.")
-    }
-
+    if (!response.body) throw new Error("No response stream available.")
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ""
-
     while (true) {
       const { done, value } = await reader.read()
-      if (done) {
-        break
-      }
+      if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split("\n")
       buffer = lines.pop() ?? ""
-
       for (const line of lines) {
         const trimmed = line.trim()
-        if (!trimmed) {
-          continue
-        }
+        if (!trimmed) continue
         onMessage(JSON.parse(trimmed) as Record<string, unknown>)
       }
     }
-
     const trailing = buffer.trim()
-    if (trailing) {
-      onMessage(JSON.parse(trailing) as Record<string, unknown>)
-    }
+    if (trailing) onMessage(JSON.parse(trailing) as Record<string, unknown>)
   }
 
   async function runCodeSearch() {
     const q = question.trim()
-    if (!q || searchLoading) {
-      return
-    }
-
+    if (!q || searchLoading) return
     setSearchLoading(true)
     setSearchError("")
     setSearchAnswer("")
     setSearchResults([])
     setSearchRun((r) => r + 1)
-
     try {
       const res = await fetch(apiUrl("/ask"), {
         method: "POST",
@@ -277,21 +273,15 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
         credentials: "include",
         body: JSON.stringify({ question: q }),
       })
-
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string }
         setSearchError(data.error ?? "Code search failed.")
         return
       }
-
       await readNdjsonStream(res, (msg) => {
-        if (msg.type === "delta") {
-          setSearchAnswer((prev) => prev + String(msg.text ?? ""))
-        } else if (msg.type === "sources") {
-          setSearchResults(Array.isArray(msg.results) ? (msg.results as SearchResult[]) : [])
-        } else if (msg.type === "error") {
-          setSearchError(String(msg.text ?? "Search failed."))
-        }
+        if (msg.type === "delta") setSearchAnswer((prev) => prev + String(msg.text ?? ""))
+        else if (msg.type === "sources") setSearchResults(Array.isArray(msg.results) ? (msg.results as SearchResult[]) : [])
+        else if (msg.type === "error") setSearchError(String(msg.text ?? "Search failed."))
       })
     } catch {
       setSearchError("Network error. Please try again.")
@@ -302,33 +292,22 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
 
   async function loadPropertyContext() {
     const addr = address.trim()
-    if (!addr || contextLoading) {
-      return
-    }
-
+    if (!addr || contextLoading) return
     setContextLoading(true)
     setReviewError("")
     setPropertyContext(null)
-
     try {
       const res = await fetch(apiUrl("/api/property-context"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify(
-          selectedMagicKey
-            ? { address: addr, magic_key: selectedMagicKey }
-            : { address: addr },
+          selectedMagicKey ? { address: addr, magic_key: selectedMagicKey } : { address: addr },
         ),
       })
       const data = (await res.json()) as PropertyContext
-      if (!res.ok) {
-        setReviewError(data.error ?? "Could not load property context.")
-        return
-      }
-      if (data.error) {
-        setReviewError(data.error)
-      }
+      if (!res.ok) { setReviewError(data.error ?? "Could not load property context."); return }
+      if (data.error) setReviewError(data.error)
       setPropertyContext(data)
     } catch {
       setReviewError("Network error while loading property context.")
@@ -338,17 +317,13 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   }
 
   async function runAddressReview() {
-    if (reviewLoading || propertyContext?.x == null || propertyContext?.y == null) {
-      return
-    }
-
+    if (reviewLoading || propertyContext?.x == null || propertyContext?.y == null) return
     setReviewLoading(true)
     setReviewError("")
     setReviewAnswer("")
     setReviewResults([])
     setReviewRequirements([])
     setReviewRun((r) => r + 1)
-
     try {
       const res = await fetch(apiUrl("/address-review"), {
         method: "POST",
@@ -362,13 +337,11 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
           y: propertyContext.y,
         }),
       })
-
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string }
         setReviewError(data.error ?? "Address review failed.")
         return
       }
-
       await readNdjsonStream(res, (msg) => {
         if (msg.type === "meta") {
           setPropertyContext((prev) => ({
@@ -383,9 +356,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
           setReviewAnswer((prev) => prev + String(msg.text ?? ""))
         } else if (msg.type === "sources") {
           setReviewResults(Array.isArray(msg.results) ? (msg.results as SearchResult[]) : [])
-          setReviewRequirements(
-            Array.isArray(msg.requirements) ? (msg.requirements as AddressRequirement[]) : [],
-          )
+          setReviewRequirements(Array.isArray(msg.requirements) ? (msg.requirements as AddressRequirement[]) : [])
         } else if (msg.type === "error") {
           setReviewError(String(msg.text ?? "Address review failed."))
         }
@@ -397,179 +368,150 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     }
   }
 
-  // Tampa Code tab is full-bleed, handle outside the main layout
-  if (activeTab === "tampa-code") {
-    return (
-      <div className="flex h-screen flex-col bg-background">
-        <header className="shrink-0 border-b border-border bg-card">
-          <div className="flex h-[60px] w-full items-center gap-4 px-6">
-            <div>
-              <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Permit Workspace</p>
-              <p className="text-base font-bold leading-tight text-foreground">PermitIQ</p>
-            </div>
-            <div className="flex-1" />
-            <Button variant="outline" size="sm" onClick={toggleTheme} className="h-8 gap-1.5 px-3 text-xs">
-              {theme === "dark" ? <><Sun className="size-3.5" />Light</> : <><Moon className="size-3.5" />Dark</>}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={signOut} disabled={signingOut} className="h-8 px-3 text-xs">
-              {signingOut ? "Signing out..." : "Sign out"}
-            </Button>
-          </div>
-        </header>
-        <div className="flex flex-1 overflow-hidden gap-4 p-4">
-          {/* Sidebar */}
-          <nav className="w-[220px] shrink-0 rounded-xl border border-border bg-card p-2 space-y-0.5 self-start">
-            <button
-              onClick={() => setActiveTab("code-search")}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            >
-              <FileSearch className="size-4 shrink-0" />
-              Code Search
-            </button>
-            <button
-              onClick={() => setActiveTab("address-review")}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-            >
-              <MapPinned className="size-4 shrink-0" />
-              Address Review
-            </button>
-            <button
-              onClick={() => setActiveTab("tampa-code")}
-              className="flex w-full items-center gap-2.5 rounded-lg bg-accent px-3 py-2.5 text-sm font-semibold text-accent-foreground"
-            >
-              <BookOpen className="size-4 shrink-0" />
-              Tampa Code
-            </button>
-          </nav>
-          <div className="flex flex-1 overflow-hidden flex-col rounded-xl border border-border bg-card">
-            <div className="shrink-0 flex gap-1 border-b border-border px-3 py-2">
-              <button
-                onClick={() => setActivePdf("pdf1")}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${activePdf === "pdf1" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50"}`}
-              >
-                Tampa Code (22-11-21-28-6-19-17)
-              </button>
-              <button
-                onClick={() => setActivePdf("pdf2")}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${activePdf === "pdf2" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50"}`}
-              >
-                Tampa Code (5-27)
-              </button>
-            </div>
-            <iframe
-              key={activePdf}
-              src={apiUrl(activePdf === "pdf1" ? "/pdf" : "/pdf2")}
-              title="Tampa Code of Ordinances"
-              className="w-full flex-1 border-0 block"
-            />
-          </div>
-        </div>
-      </div>
-    )
-  }
+  const NAV_ITEMS = [
+    { id: "code-search", label: "Code Search", icon: <FileSearch className="size-4 shrink-0" />, hotkey: "1" },
+    { id: "address-review", label: "Address Review", icon: <MapPinned className="size-4 shrink-0" />, hotkey: "2" },
+    { id: "tampa-code", label: "Tampa Code", icon: <BookOpen className="size-4 shrink-0" />, hotkey: "3" },
+  ]
+
+  const tabLabel = {
+    "code-search": "Code Search",
+    "address-review": "Address Review",
+    "tampa-code": "Tampa Code",
+  }[activeTab] ?? ""
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex h-[60px] w-full items-center gap-4 px-6">
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Permit Workspace</p>
-            <p className="text-base font-bold leading-tight text-foreground">PermitIQ</p>
+    <div className="h-screen flex bg-background overflow-hidden">
+      {/* ── Sidebar ── */}
+      <aside className="w-[232px] shrink-0 flex flex-col border-r border-border bg-card">
+        {/* Brand */}
+        <div className="flex items-center gap-2.5 px-4 h-[60px] shrink-0 border-b border-border">
+          <div className="size-7 rounded-[7px] flex items-center justify-center bg-primary text-primary-foreground shrink-0">
+            <Building2 className="size-4" />
           </div>
+          <div className="min-w-0">
+            <div className="font-semibold text-[14px] leading-tight text-foreground">PermitIQ</div>
+            <div className="text-[11px] leading-tight text-muted-foreground">Tampa, FL</div>
+          </div>
+        </div>
+
+        {/* New query */}
+        <div className="px-3 pt-3 pb-1.5">
+          <Button
+            size="sm"
+            className="w-full justify-start gap-1.5"
+            onClick={() => { setActiveTab("code-search"); setQuestion(""); setSearchAnswer(""); setSearchResults([]) }}
+          >
+            <Search className="size-3.5" />
+            New query
+          </Button>
+        </div>
+
+        {/* Nav */}
+        <nav className="px-2 pt-2 space-y-0.5">
+          <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+            Workspace
+          </div>
+          {NAV_ITEMS.map((item) => {
+            const active = activeTab === item.id
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full flex items-center gap-2.5 rounded-[8px] px-2.5 h-9 text-[13px] font-medium transition-colors ${
+                  active
+                    ? "bg-primary/10 text-primary"
+                    : "text-foreground hover:bg-muted"
+                }`}
+              >
+                <span className={active ? "text-primary" : "text-muted-foreground"}>
+                  {item.icon}
+                </span>
+                <span className="flex-1 text-left">{item.label}</span>
+                <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] font-mono opacity-40 leading-none">
+                  ⌘{item.hotkey}
+                </kbd>
+              </button>
+            )
+          })}
+        </nav>
+
+        {/* Footer */}
+        <div className="mt-auto p-3 border-t border-border">
+          <div className="flex items-center gap-2.5">
+            <div className="size-8 rounded-full flex items-center justify-center font-semibold text-[12px] shrink-0 bg-primary/10 text-primary">
+              U
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-[12.5px] truncate text-foreground">Demo User</div>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={signOut}
+              disabled={signingOut}
+              title="Sign out"
+            >
+              <LogOut className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── Right: top bar + content ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Top bar */}
+        <header className="h-[60px] shrink-0 flex items-center gap-4 px-6 border-b border-border bg-card">
+          <div className="flex items-center gap-1.5 text-[13px]">
+            <span className="text-muted-foreground">Workspace</span>
+            <ChevronRight className="size-3.5 text-muted-foreground" />
+            <span className="font-medium text-foreground">{tabLabel}</span>
+          </div>
+
           <div className="flex-1" />
-          <Button variant="outline" size="sm" onClick={toggleTheme} className="h-8 gap-1.5 px-3 text-xs">
-            {theme === "dark" ? <><Sun className="size-3.5" />Light</> : <><Moon className="size-3.5" />Dark</>}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={signOut} disabled={signingOut} className="h-8 px-3 text-xs">
-            {signingOut ? "Signing out..." : "Sign out"}
-          </Button>
-        </div>
-      </header>
 
-      <div className="px-6 py-4 space-y-4">
-        {/* Info cards */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="rounded-xl border border-border bg-card px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Session</p>
-            <p className="mt-1 text-sm font-semibold text-foreground">Authenticated and ready</p>
+          {/* Backend status pill */}
+          <div className="flex items-center gap-1.5 px-2.5 h-7 rounded-full border border-border bg-muted/30 text-[12px]">
+            <span className="size-1.5 rounded-full pulse-dot bg-emerald-500" />
+            <span className="text-muted-foreground">Backend</span>
+            <span className="font-medium text-foreground">Ready</span>
           </div>
-          <div className="rounded-xl border border-border bg-card px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Data Source</p>
-            <p className="mt-1 text-sm font-semibold text-foreground">Tampa GIS + Code index</p>
-          </div>
-        </div>
 
-        {/* Main layout: sidebar + content */}
-        <div className="flex gap-4 items-start">
-          {/* Sidebar nav */}
-          <nav className="w-[220px] shrink-0 rounded-xl border border-border bg-card p-2 space-y-0.5">
-            <button
-              onClick={() => setActiveTab("code-search")}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-colors ${
-                activeTab === "code-search"
-                  ? "bg-accent font-semibold text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              }`}
-            >
-              <FileSearch className="size-4 shrink-0" />
-              Code Search
-            </button>
-            <button
-              onClick={() => setActiveTab("address-review")}
-              className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-colors ${
-                activeTab === "address-review"
-                  ? "bg-accent font-semibold text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              }`}
-            >
-              <MapPinned className="size-4 shrink-0" />
-              Address Review
-            </button>
-            <button
-              onClick={() => setActiveTab("tampa-code")}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              <BookOpen className="size-4 shrink-0" />
-              Tampa Code
-            </button>
-          </nav>
+          <Button variant="ghost" size="icon" onClick={toggleTheme} title="Toggle theme">
+            {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </Button>
+        </header>
 
-          {/* Content panel */}
-          <div className="flex-1 rounded-xl border border-border bg-card">
+        {/* ── Content ── */}
+        <main className="flex-1 overflow-hidden">
 
-            {/* ── Code Search ── */}
-            {activeTab === "code-search" && (
-              <div className="p-6 space-y-6">
-                {/* Header row */}
-                <div className="flex items-start justify-between gap-4">
+          {/* ── Code Search ── */}
+          {activeTab === "code-search" && (
+            <div className="h-full overflow-y-auto scroll-zone">
+              <div className="max-w-[1240px] mx-auto px-8 py-7">
+                {/* Page header */}
+                <div className="flex items-start justify-between gap-6 mb-6">
                   <div>
-                    <h1 className="text-xl font-bold text-foreground">Code Search</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Ask a question about Tampa building codes and permit requirements.
+                    <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground mb-1.5">
+                      <Search className="size-3.5 text-primary" />
+                      Natural-language RAG
+                    </div>
+                    <h1 className="text-[26px] font-semibold tracking-tight text-foreground">Code Search</h1>
+                    <p className="mt-1 text-[14px] max-w-[64ch] text-muted-foreground">
+                      Ask anything about Tampa building codes and permit requirements. Answers stream from the Tampa Code of Ordinances with exact clause citations.
                     </p>
                   </div>
-                  <span className="mt-1 shrink-0 rounded-full bg-primary/15 px-3 py-1 text-[11px] font-semibold text-primary">
-                    Ready now
-                  </span>
                 </div>
 
-                {/* Two-column form + results */}
-                <div className="grid gap-6 lg:grid-cols-2">
-                  {/* Left: input */}
+                <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,1.25fr)" }}>
+                  {/* Left: form */}
                   <div className="space-y-4">
-                    <div>
-                      <label
-                        htmlFor="question"
-                        className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
-                      >
-                        Your question
-                      </label>
+                    {/* Textarea card */}
+                    <div className="rounded-[12px] border border-border bg-card p-1.5">
                       <textarea
-                        id="question"
-                        className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-50"
-                        style={{ minHeight: "120px" }}
-                        placeholder="What are the setback and height requirements for ADU construction in Tampa?"
+                        className="w-full resize-none rounded-[10px] px-4 py-3 text-[14px] leading-6 border-0 bg-transparent outline-none text-foreground placeholder:text-muted-foreground"
+                        style={{ minHeight: 132 }}
+                        placeholder="e.g. What are the setback and height requirements for an ADU in RS-60?"
                         value={question}
                         onChange={(e) => setQuestion(e.target.value)}
                         onKeyDown={(e) => {
@@ -580,115 +522,227 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                         }}
                         disabled={searchLoading}
                       />
+                      <div className="flex items-center justify-between px-2 pt-1 pb-1">
+                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <span>Press</span>
+                          <kbd className="px-1 py-0.5 rounded text-[10px] bg-muted border border-border font-mono leading-none">⌘</kbd>
+                          <kbd className="px-1 py-0.5 rounded text-[10px] bg-muted border border-border font-mono leading-none">↵</kbd>
+                          <span>to search</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[11px] text-muted-foreground">{question.length} / 800</span>
+                          <Button
+                            size="sm"
+                            onClick={runCodeSearch}
+                            disabled={!question.trim() || searchLoading}
+                          >
+                            {searchLoading ? "Searching…" : "Run search →"}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-[11px] text-muted-foreground">Press ⌘ Enter to search</p>
-                      <Button
-                        onClick={runCodeSearch}
-                        disabled={searchLoading || !question.trim()}
-                        size="sm"
-                        className="h-8 px-4"
-                      >
-                        {searchLoading ? "Searching..." : "Run code search"}
-                      </Button>
-                    </div>
-                    {searchError ? (
+
+                    {/* Suggested questions */}
+                    {!searchAnswer && !searchLoading && (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2 text-muted-foreground">
+                          Try a question
+                        </div>
+                        <div className="space-y-1.5">
+                          {SUGGESTED_QUESTIONS.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => setQuestion(s)}
+                              className="w-full text-left rounded-[8px] px-3.5 py-2.5 text-[13px] border border-border bg-card hover:border-border-strong transition-colors flex items-center justify-between gap-2 group text-foreground"
+                            >
+                              <span>{s}</span>
+                              <ChevronRight className="size-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Retrieval metadata */}
+                    {(searchLoading || searchAnswer) && (
+                      <div className="rounded-[10px] border border-border bg-card p-4">
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2.5 text-muted-foreground">
+                          Retrieval
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-[12px]">
+                          {[
+                            ["Model", "gpt-4o-mini"],
+                            ["Embed", "text-embedding-3-small"],
+                            ["k", "10 chunks"],
+                            ["Multi-query", "Enabled (n=3)"],
+                          ].map(([k, v]) => (
+                            <div key={k}>
+                              <div className="text-muted-foreground">{k}</div>
+                              <div className="font-mono mt-0.5 text-foreground">{v}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {searchError && (
                       <p className="rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-3 text-sm text-destructive">
                         {searchError}
                       </p>
-                    ) : null}
+                    )}
                   </div>
 
-                  {/* Right: results */}
+                  {/* Right: result */}
                   <div className="space-y-4">
                     {!searchAnswer && !searchResults.length && !searchLoading ? (
-                      <div className="flex min-h-[180px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 px-8 py-10 text-center">
-                        <p className="text-sm font-medium text-foreground">Your answer appears here</p>
-                        <p className="mt-1.5 max-w-[36ch] text-xs leading-5 text-muted-foreground">
-                          Submit a question to see the streamed answer and source excerpts.
-                        </p>
+                      <div className="rounded-[12px] border border-dashed border-border bg-card/50 px-8 py-16 text-center">
+                        <div className="mx-auto size-12 rounded-full flex items-center justify-center mb-4 bg-primary/10 text-primary">
+                          <Search className="size-5" />
+                        </div>
+                        <div className="font-medium text-[15px] text-foreground">Your answer appears here</div>
+                        <div className="mt-1.5 max-w-[42ch] mx-auto text-[13px] text-muted-foreground">
+                          Submit a question to see the streamed answer and every source excerpt it was grounded in.
+                        </div>
                       </div>
-                    ) : null}
-
-                    {searchAnswer ? (
-                      <div className="rounded-xl border border-border bg-background px-5 py-4">
-                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Answer</p>
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{searchAnswer}</p>
-                      </div>
-                    ) : null}
-
-                    {searchResults.length ? (
-                      <div className="space-y-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Source excerpts</p>
-                        {searchResults.map((result, index) => (
-                          <div key={`${result.chunk_id ?? "chunk"}-${index}`} className="rounded-lg border border-border bg-background px-4 py-3">
-                            <p className="text-xs font-medium text-muted-foreground">
-                              {result.chunk_id ?? "Source chunk"}{result.page ? ` · Page ${result.page}` : ""}
-                            </p>
-                            <p className="mt-1.5 line-clamp-4 text-sm leading-6 text-foreground">{result.text ?? ""}</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Answer card */}
+                        <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                          <div className="flex items-center justify-between px-5 py-2.5 border-b border-border">
+                            <div className="flex items-center gap-2">
+                              <span
+                                className={`size-1.5 rounded-full pulse-dot ${searchLoading ? "bg-primary" : "bg-emerald-500"}`}
+                              />
+                              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                                {searchLoading ? "Streaming answer" : "Answer"}
+                              </span>
+                            </div>
+                            {!searchLoading && searchAnswer && (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                title="Copy answer"
+                                onClick={() => navigator.clipboard?.writeText(searchAnswer)}
+                              >
+                                <Copy className="size-3.5" />
+                              </Button>
+                            )}
                           </div>
-                        ))}
-                      </div>
-                    ) : null}
 
-                    {!searchLoading && searchAnswer ? (
-                      <FlagAnswer key={searchRun} queryType="search" question={question} answerSnippet={searchAnswer} />
-                    ) : null}
+                          <div className="px-6 py-5 text-[14.5px] leading-[1.65] text-foreground" style={{ maxWidth: "72ch" }}>
+                            <span className="whitespace-pre-wrap">{searchAnswer}</span>
+                            {searchLoading && <span className="stream-cursor" />}
+                          </div>
+
+                          {!searchLoading && searchAnswer && (
+                            <div className="px-5 py-2.5 border-t border-border bg-muted/20">
+                              <FlagAnswer
+                                key={searchRun}
+                                queryType="search"
+                                question={question}
+                                answerSnippet={searchAnswer}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Sources */}
+                        {searchResults.length > 0 && (
+                          <div className="rounded-[12px] border border-border bg-card">
+                            <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border">
+                              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                                Source excerpts
+                              </span>
+                              <span className="inline-flex items-center justify-center size-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold">
+                                {searchResults.length}
+                              </span>
+                            </div>
+                            <div className="divide-y divide-border">
+                              {searchResults.map((result, index) => (
+                                <div key={`${result.chunk_id ?? "chunk"}-${index}`} className="px-5 py-3.5 flex gap-3">
+                                  <div className="shrink-0 size-6 rounded-md flex items-center justify-center text-[11px] font-semibold font-mono bg-primary/10 text-primary">
+                                    {index + 1}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                      <span className="font-mono text-[11.5px] font-medium text-foreground">
+                                        {result.chunk_id ?? "Source chunk"}
+                                      </span>
+                                      {result.page && (
+                                        <span className="text-[11px] text-muted-foreground">· Page {result.page}</span>
+                                      )}
+                                    </div>
+                                    <p className="text-[13px] leading-[1.55] text-muted-foreground line-clamp-4">
+                                      {result.text ?? ""}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* ── Address Review ── */}
-            {activeTab === "address-review" && (
-              <div className="p-6 space-y-6">
-                {/* Header row */}
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h1 className="text-xl font-bold text-foreground">Address Review</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Enter a Tampa property address to retrieve zoning context and permit-related requirements for project planning.
-                    </p>
+          {/* ── Address Review ── */}
+          {activeTab === "address-review" && (
+            <div className="h-full overflow-y-auto scroll-zone">
+              <div className="max-w-[1240px] mx-auto px-8 py-7">
+                {/* Page header */}
+                <div className="mb-6">
+                  <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground mb-1.5">
+                    <MapPinned className="size-3.5 text-primary" />
+                    Parcel-grounded requirements
                   </div>
-                  <span className="mt-1 shrink-0 rounded-full bg-primary/15 px-3 py-1 text-[11px] font-semibold text-primary">
-                    Ready now
-                  </span>
+                  <h1 className="text-[26px] font-semibold tracking-tight text-foreground">Address Review</h1>
+                  <p className="mt-1 text-[14px] max-w-[64ch] text-muted-foreground">
+                    Enter a Tampa property and project type. PermitIQ pulls zoning, overlays, and parcel data from the City ArcGIS, then extracts the specific code requirements for your scope.
+                  </p>
                 </div>
 
-                {/* Two-column form + results */}
-                <div className="grid gap-6 lg:grid-cols-2">
+                <div className="grid gap-6" style={{ gridTemplateColumns: "minmax(0,420px) minmax(0,1fr)" }}>
                   {/* Left: form */}
                   <div className="space-y-4">
-                    {/* Address */}
+                    {/* Address with pin icon */}
                     <div>
-                      <label
-                        htmlFor="address"
-                        className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
-                      >
+                      <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] mb-1.5 text-muted-foreground">
                         Property address
                       </label>
                       <div ref={addressBoxRef} className="relative">
-                        <input
-                          id="address"
-                          type="text"
-                          value={address}
-                          onChange={(e) => handleAddressChange(e.target.value)}
-                          onFocus={() => { if (addressSuggestions.length > 0) setSuggestOpen(true) }}
-                          onKeyDown={handleAddressKeyDown}
-                          placeholder="Start typing: 401 E Jackson St"
-                          disabled={contextLoading || reviewLoading}
-                          autoComplete="off"
-                          role="combobox"
-                          aria-expanded={suggestOpen}
-                          aria-autocomplete="list"
-                          aria-controls="address-suggestions"
-                          className="h-10 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                        {suggestOpen && addressSuggestions.length > 0 ? (
+                        <div className="flex items-center h-10 rounded-[9px] border px-3 gap-2 focus-within:border-primary transition-colors bg-card"
+                          style={{ borderColor: "var(--border-strong)" }}>
+                          <MapPin className="size-4 text-muted-foreground shrink-0" />
+                          <input
+                            type="text"
+                            value={address}
+                            onChange={(e) => handleAddressChange(e.target.value)}
+                            onFocus={() => { if (addressSuggestions.length > 0) setSuggestOpen(true) }}
+                            onKeyDown={handleAddressKeyDown}
+                            placeholder="401 E Jackson St"
+                            disabled={contextLoading || reviewLoading}
+                            autoComplete="off"
+                            role="combobox"
+                            aria-expanded={suggestOpen}
+                            aria-autocomplete="list"
+                            aria-controls="address-suggestions"
+                            className="flex-1 outline-none bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground disabled:opacity-50"
+                          />
+                          {selectedMagicKey && (
+                            <span className="shrink-0 inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[11px] font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+                              ✓ Matched
+                            </span>
+                          )}
+                        </div>
+                        {suggestOpen && addressSuggestions.length > 0 && (
                           <ul
                             id="address-suggestions"
                             role="listbox"
-                            className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded-lg border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+                            className="absolute left-0 right-0 top-full z-20 mt-1 max-h-64 overflow-auto rounded-[9px] border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
                           >
                             {addressSuggestions.map((s, i) => {
                               const label = s.label ?? s.address ?? ""
@@ -700,174 +754,310 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                                   aria-selected={active}
                                   onMouseDown={(e) => { e.preventDefault(); selectSuggestion(s) }}
                                   onMouseEnter={() => setHighlightIndex(i)}
-                                  className={`cursor-pointer px-4 py-2.5 leading-5 ${active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"}`}
+                                  className="flex items-center gap-2 px-3 h-9 cursor-pointer transition-colors"
+                                  style={{
+                                    background: active ? "var(--primary-soft)" : "transparent",
+                                    color: active ? "var(--primary-soft-fg)" : "var(--foreground)",
+                                  }}
                                 >
-                                  {label}
+                                  <MapPin className="size-3.5 shrink-0 text-muted-foreground" />
+                                  <span className="truncate text-[13.5px]">{label}</span>
                                 </li>
                               )
                             })}
                           </ul>
-                        ) : null}
-                        {suggestLoading && address.trim().length >= 3 ? (
-                          <p className="mt-1.5 text-[11px] text-muted-foreground">Searching Tampa addresses...</p>
-                        ) : null}
+                        )}
+                        {suggestLoading && address.trim().length >= 3 && (
+                          <p className="mt-1.5 text-[11px] text-muted-foreground">
+                            Powered by Tampa ArcGIS autocomplete…
+                          </p>
+                        )}
                       </div>
                     </div>
 
                     {/* Permit type */}
                     <div>
-                      <label
-                        htmlFor="permit-type"
-                        className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
-                      >
-                        Permit type <span className="font-normal normal-case tracking-normal">(optional)</span>
+                      <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] mb-1.5 text-muted-foreground">
+                        Permit type <span className="font-normal normal-case">(optional)</span>
                       </label>
                       <div className="relative">
                         <select
-                          id="permit-type"
                           value={permitType}
                           onChange={(e) => setPermitType(e.target.value)}
                           disabled={reviewLoading}
-                          className="h-10 w-full appearance-none rounded-lg border border-input bg-background px-4 pr-9 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="w-full h-10 rounded-[9px] px-3 pr-8 text-[14px] appearance-none border outline-none transition-colors bg-card text-foreground disabled:opacity-50"
+                          style={{ borderColor: "var(--border-strong)" }}
                         >
                           {PERMIT_TYPE_OPTIONS.map((opt) => (
                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                           ))}
                         </select>
-                        <ChevronDown aria-hidden className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                       </div>
                     </div>
 
                     {/* Project description */}
                     <div>
-                      <label
-                        htmlFor="project-description"
-                        className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
-                      >
-                        Project description <span className="font-normal normal-case tracking-normal">(optional)</span>
+                      <label className="block text-[11px] font-semibold uppercase tracking-[0.08em] mb-1.5 text-muted-foreground">
+                        Project description <span className="font-normal normal-case">(optional)</span>
                       </label>
-                      <input
-                        id="project-description"
-                        type="text"
+                      <textarea
                         value={projectDescription}
                         onChange={(e) => setProjectDescription(e.target.value)}
-                        placeholder="Two-story addition with detached garage"
+                        placeholder="e.g. 2-story addition with detached garage, 1,200 sqft"
                         disabled={reviewLoading}
-                        className="h-10 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="w-full rounded-[9px] px-3 py-2.5 text-[14px] leading-6 border resize-none outline-none transition-colors bg-card text-foreground placeholder:text-muted-foreground disabled:opacity-50"
+                        style={{ borderColor: "var(--border-strong)", minHeight: 86 }}
                       />
                     </div>
 
-                    {/* Action buttons */}
-                    <div className="flex gap-2 pt-1">
-                      <Button
-                        onClick={loadPropertyContext}
-                        disabled={contextLoading || !address.trim() || reviewLoading}
-                        size="sm"
-                        className="h-8 px-4"
-                      >
-                        {contextLoading ? "Loading..." : "Load property context"}
-                      </Button>
+                    {/* Actions */}
+                    <div className="flex gap-2">
                       <Button
                         variant="outline"
+                        size="sm"
+                        onClick={loadPropertyContext}
+                        disabled={contextLoading || !address.trim() || reviewLoading}
+                        className="flex-1"
+                      >
+                        {contextLoading
+                          ? "Loading…"
+                          : propertyContext
+                          ? "✓ Context loaded"
+                          : "Load property context"}
+                      </Button>
+                      <Button
+                        size="sm"
                         onClick={runAddressReview}
                         disabled={reviewLoading || propertyContext?.x == null || propertyContext?.y == null}
-                        size="sm"
-                        className="h-8 px-4"
+                        className="flex-1"
                       >
-                        {reviewLoading ? "Reviewing..." : "Run address review"}
+                        {reviewLoading ? "Reviewing…" : "Run review →"}
                       </Button>
                     </div>
 
-                    {reviewError ? (
+                    {reviewError && (
                       <p className="rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-3 text-sm text-destructive">
                         {reviewError}
                       </p>
-                    ) : null}
+                    )}
                   </div>
 
                   {/* Right: results */}
                   <div className="space-y-4">
-                    {!propertyContext && !reviewAnswer && !reviewRequirements.length && !reviewResults.length && !reviewLoading ? (
-                      <div className="flex min-h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-muted/20 px-8 py-10 text-center">
-                        <p className="text-sm font-medium text-foreground">Property context and review results appear here</p>
-                        <p className="mt-1.5 max-w-[36ch] text-xs leading-5 text-muted-foreground">
-                          Enter an address and load the property context, then run the review to see extracted requirements and source excerpts.
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {propertyContext ? (
-                      <div className="rounded-xl border border-border bg-background px-5 py-4">
-                        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Property context</p>
-                        <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-                          <div className="flex gap-2"><dt className="w-16 shrink-0 font-medium text-foreground">Address</dt><dd className="text-foreground">{propertyContext.normalized_address ?? address}</dd></div>
-                          <div className="flex gap-2"><dt className="w-16 shrink-0 font-medium text-foreground">Zoning</dt><dd className="text-foreground">{propertyContext.zoning ?? "Unavailable"}</dd></div>
-                          <div className="flex gap-2"><dt className="w-16 shrink-0 font-medium text-foreground">Overlays</dt><dd className="text-foreground">{(propertyContext.overlays ?? []).length ? (propertyContext.overlays ?? []).join(", ") : "None"}</dd></div>
-                          <div className="flex gap-2"><dt className="w-16 shrink-0 font-medium text-foreground">Folio</dt><dd className="text-foreground">{propertyContext.folio ?? "Not matched"}</dd></div>
-                        </dl>
-                      </div>
-                    ) : null}
-
-                    {reviewLoading && !reviewRequirements.length ? (
-                      <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-5 py-4 text-sm text-muted-foreground">
-                        <span aria-hidden className="inline-block size-2.5 animate-pulse rounded-full bg-primary/70" />
-                        Generating review from Tampa code excerpts...
-                      </div>
-                    ) : null}
-
-                    {reviewRequirements.length ? (
-                      <div className="rounded-xl border border-border bg-background overflow-hidden">
-                        <div className="flex items-center justify-between px-5 py-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Code requirements</p>
-                          <span className="text-[11px] tabular-nums text-muted-foreground">{reviewRequirements.length} found</span>
+                    {/* Property context — empty state */}
+                    {!propertyContext && !contextLoading && (
+                      <div className="rounded-[12px] border border-dashed border-border bg-card/50 px-6 py-12 text-center">
+                        <div className="mx-auto size-10 rounded-full flex items-center justify-center mb-3 bg-primary/10 text-primary">
+                          <MapPin className="size-5" />
                         </div>
-                        <div className="overflow-hidden border-t border-border">
-                          <table className="w-full text-left text-sm">
-                            <thead className="bg-muted/50 text-xs uppercase tracking-[0.06em] text-muted-foreground">
-                              <tr>
-                                <th className="px-5 py-2.5 font-semibold">Requirement</th>
-                                <th className="px-5 py-2.5 font-semibold">Value</th>
-                                <th className="w-16 px-5 py-2.5 text-right font-semibold">Page</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border">
-                              {reviewRequirements.map((item, index) => (
-                                <tr key={`${item.name ?? "req"}-${index}`} className="align-top even:bg-muted/20">
-                                  <td className="px-5 py-2.5 font-medium text-foreground">{item.name ?? "Requirement"}</td>
-                                  <td className="px-5 py-2.5 text-foreground">{item.value ?? ""}</td>
-                                  <td className="px-5 py-2.5 text-right text-muted-foreground">{item.page ?? "—"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                        <div className="font-medium text-[14px] text-foreground">Property context appears here</div>
+                        <div className="mt-1 max-w-[42ch] mx-auto text-[12.5px] text-muted-foreground">
+                          Load a Tampa address to see zoning, overlays, folio, and parcel details pulled from City GIS.
                         </div>
                       </div>
-                    ) : reviewAnswer && !reviewLoading && !looksLikeJsonArray(reviewAnswer) ? (
-                      <div className="rounded-xl border border-border bg-background px-5 py-4">
-                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Review summary</p>
-                        <p className="whitespace-pre-wrap text-sm leading-6 text-foreground">{reviewAnswer}</p>
-                      </div>
-                    ) : reviewAnswer && !reviewLoading && looksLikeJsonArray(reviewAnswer) ? (
-                      <div className="rounded-xl border border-border bg-background px-5 py-4 text-sm text-muted-foreground">
-                        No explicit code requirements were extracted. Review the source excerpts below for context.
-                      </div>
-                    ) : null}
+                    )}
 
-                    {reviewResults.length ? (
-                      <div className="space-y-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Source excerpts</p>
-                        {reviewResults.map((result, index) => (
-                          <div key={`${result.chunk_id ?? "chunk"}-${index}`} className="rounded-lg border border-border bg-background px-4 py-3">
-                            <p className="text-xs font-medium text-muted-foreground">
-                              {result.chunk_id ?? "Source chunk"}{result.page ? ` · Page ${result.page}` : ""}
-                            </p>
-                            <p className="mt-1.5 line-clamp-4 text-sm leading-6 text-foreground">{result.text ?? ""}</p>
-                          </div>
+                    {/* Property context — loading skeleton */}
+                    {contextLoading && (
+                      <div className="rounded-[12px] border border-border bg-card p-5 space-y-3">
+                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <svg width="12" height="12" viewBox="0 0 24 24" className="animate-spin">
+                            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" fill="none" strokeDasharray="40 20" />
+                          </svg>
+                          Querying Tampa ArcGIS…
+                        </div>
+                        {[80, 65, 90, 55].map((w, i) => (
+                          <div key={i} className="h-4 rounded stripe-placeholder" style={{ width: `${w}%` }} />
                         ))}
                       </div>
-                    ) : null}
+                    )}
 
-                    {!reviewLoading && (reviewRequirements.length > 0 || (reviewAnswer && !looksLikeJsonArray(reviewAnswer))) ? (
+                    {/* Property context — data card */}
+                    {propertyContext && (
+                      <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-2.5 border-b border-border">
+                          <div className="flex items-center gap-2">
+                            <MapPin className="size-3.5 text-primary" />
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                              Property context
+                            </span>
+                            {propertyContext.inside_city && (
+                              <span className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[11px] font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+                                ✓ Inside city
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2">
+                          {/* Map placeholder */}
+                          <div className="relative stripe-placeholder border-r border-border" style={{ minHeight: 180 }}>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+                              <div className="size-9 rounded-full flex items-center justify-center bg-primary text-primary-foreground">
+                                <MapPin className="size-4" />
+                              </div>
+                              {propertyContext.x != null && propertyContext.y != null && (
+                                <div className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-card text-muted-foreground border border-border">
+                                  {propertyContext.y?.toFixed(4)}° N, {Math.abs(propertyContext.x ?? 0).toFixed(4)}° W
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Property details */}
+                          <div className="p-4 space-y-3">
+                            <div>
+                              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Address</div>
+                              <div className="mt-0.5 text-[13px] font-medium text-foreground">
+                                {propertyContext.normalized_address ?? address}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Zoning</div>
+                              <div className="mt-0.5 text-[13px] font-mono text-foreground">
+                                {propertyContext.zoning ?? "Unavailable"}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-1">Overlays</div>
+                              {(propertyContext.overlays ?? []).length > 0 ? (
+                                <div className="flex gap-1.5 flex-wrap">
+                                  {(propertyContext.overlays ?? []).map((o) => (
+                                    <span key={o} className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium bg-muted text-muted-foreground border border-border">
+                                      {o}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[13px] text-muted-foreground">None</span>
+                              )}
+                            </div>
+                            <div>
+                              <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Folio</div>
+                              <div className="mt-0.5 text-[12.5px] font-mono text-foreground">
+                                {propertyContext.folio ?? "Not matched"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Review streaming */}
+                    {(reviewLoading || reviewAnswer) && (
+                      <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border">
+                          <span
+                            className={`size-1.5 rounded-full pulse-dot ${reviewLoading ? "bg-primary" : "bg-emerald-500"}`}
+                          />
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            {reviewLoading ? "Generating review" : "Review summary"}
+                          </span>
+                        </div>
+                        <div className="px-5 py-4 text-[14px] leading-[1.6] text-foreground" style={{ maxWidth: "72ch" }}>
+                          {!looksLikeJsonArray(reviewAnswer) && <span className="whitespace-pre-wrap">{reviewAnswer}</span>}
+                          {reviewLoading && <span className="stream-cursor" />}
+                          {!reviewLoading && looksLikeJsonArray(reviewAnswer) && (
+                            <span className="text-muted-foreground text-sm">No explicit code requirements were extracted. Review the source excerpts below for context.</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Requirements table */}
+                    {reviewRequirements.length > 0 && (
+                      <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                        <div className="flex items-center justify-between px-5 py-2.5 border-b border-border">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                              Extracted requirements
+                            </span>
+                            <span className="inline-flex items-center justify-center size-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold">
+                              {reviewRequirements.length}
+                            </span>
+                          </div>
+                        </div>
+                        <table className="w-full text-left text-[13.5px]">
+                          <thead>
+                            <tr className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/30">
+                              <th className="px-5 py-2 font-semibold">Requirement</th>
+                              <th className="px-5 py-2 font-semibold">Value</th>
+                              <th className="px-5 py-2 font-semibold">Page</th>
+                              <th className="px-5 py-2 font-semibold text-right">Note</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border">
+                            {reviewRequirements.map((item, index) => (
+                              <tr key={`${item.name ?? "req"}-${index}`} className="align-middle" style={index % 2 ? { background: "var(--card-2)" } : {}}>
+                                <td className="px-5 py-2.5 font-medium text-foreground">{item.name ?? "Requirement"}</td>
+                                <td className="px-5 py-2.5">
+                                  <span className="font-mono text-[12.5px] text-foreground">{item.value ?? ""}</span>
+                                </td>
+                                <td className="px-5 py-2.5">
+                                  <span className="font-mono text-[11.5px] text-muted-foreground">
+                                    {item.page ? `p.${item.page}` : "—"}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-2.5 text-right">
+                                  {item.severity === "alert" && (
+                                    <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium bg-destructive/10 text-destructive">
+                                      Review required
+                                    </span>
+                                  )}
+                                  {item.severity === "watch" && (
+                                    <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium text-[var(--accent-warm-fg)]" style={{ background: "var(--accent-warm-soft)" }}>
+                                      Verify
+                                    </span>
+                                  )}
+                                  {(!item.severity || item.severity === "standard") && (
+                                    <span className="text-muted-foreground">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Source excerpts */}
+                    {reviewResults.length > 0 && (
+                      <div className="rounded-[12px] border border-border bg-card">
+                        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border">
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            Source excerpts
+                          </span>
+                          <span className="inline-flex items-center justify-center size-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold">
+                            {reviewResults.length}
+                          </span>
+                        </div>
+                        <div className="divide-y divide-border">
+                          {reviewResults.map((result, index) => (
+                            <div key={`${result.chunk_id ?? "chunk"}-${index}`} className="px-5 py-3.5 flex gap-3">
+                              <div className="shrink-0 size-6 rounded-md flex items-center justify-center text-[11px] font-semibold font-mono bg-primary/10 text-primary">
+                                {index + 1}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                  <span className="font-mono text-[11.5px] font-medium text-foreground">
+                                    {result.chunk_id ?? "Source chunk"}
+                                  </span>
+                                  {result.page && (
+                                    <span className="text-[11px] text-muted-foreground">· Page {result.page}</span>
+                                  )}
+                                </div>
+                                <p className="text-[13px] leading-[1.55] text-muted-foreground line-clamp-4">
+                                  {result.text ?? ""}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {!reviewLoading && (reviewRequirements.length > 0 || (reviewAnswer && !looksLikeJsonArray(reviewAnswer))) && (
                       <FlagAnswer
                         key={reviewRun}
                         queryType="address_review"
@@ -875,14 +1065,57 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                         zoning={propertyContext?.zoning ?? ""}
                         answerSnippet={reviewAnswer || reviewRequirements.map((r) => `${r.name ?? ""}: ${r.value ?? ""}`).join("\n")}
                       />
-                    ) : null}
+                    )}
                   </div>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-          </div>
-        </div>
+          {/* ── Tampa Code ── */}
+          {activeTab === "tampa-code" && (
+            <div className="h-full" style={{ display: "grid", gridTemplateColumns: "280px 1fr" }}>
+              {/* Document list */}
+              <div className="border-r border-border flex flex-col bg-card">
+                <div className="px-5 py-4 border-b border-border">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                    Source documents
+                  </div>
+                  <div className="text-[13.5px] mt-0.5 text-foreground">3 PDFs · indexed April 2026</div>
+                </div>
+                <div className="p-2 space-y-1">
+                  {[
+                    { id: "pdf1" as const, label: "tampa-code-5-27.pdf", sub: "Primary — Tampa Code of Ordinances" },
+                    { id: "pdf2" as const, label: "tampa-code-22-11.pdf", sub: "Supplementary — Amendments" },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setActivePdf(p.id)}
+                      className="w-full text-left rounded-[9px] border px-3 py-2.5 transition-colors"
+                      style={{
+                        background: activePdf === p.id ? "var(--primary-soft)" : "transparent",
+                        borderColor: activePdf === p.id ? "transparent" : "var(--border)",
+                        color: activePdf === p.id ? "var(--primary-soft-fg)" : "var(--foreground)",
+                      }}
+                    >
+                      <div className="text-[13px] font-medium font-mono">{p.label}</div>
+                      <div className="text-[11.5px] mt-0.5 text-muted-foreground">{p.sub}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* PDF viewer */}
+              <iframe
+                key={activePdf}
+                src={apiUrl(activePdf === "pdf1" ? "/pdf" : "/pdf2")}
+                title="Tampa Code of Ordinances"
+                className="w-full h-full border-0 block"
+              />
+            </div>
+          )}
+
+        </main>
       </div>
     </div>
   )

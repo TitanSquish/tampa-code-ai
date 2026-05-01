@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button"
 import FlagAnswer from "@/components/FlagAnswer"
+import TampaCodeTocViewer from "@/components/TampaCodeTocViewer"
 import { useEffect, useRef, useState } from "react"
 import { apiUrl } from "@/lib/api"
 import { applyTheme, readThemePreference, saveThemePreference, type Theme } from "@/lib/theme"
@@ -235,15 +236,6 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   const suppressNextFetchRef = useRef(false)
   const addressBoxRef = useRef<HTMLDivElement | null>(null)
 
-  const [toc, setToc] = useState<TocChapter[]>([])
-  const [tocLoading, setTocLoading] = useState(false)
-  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
-  const [activeSection, setActiveSection] = useState<string | null>(null)
-  const [sectionContent, setSectionContent] = useState<SectionContent | null>(null)
-  const [sectionLoading, setSectionLoading] = useState(false)
-  const [tocFilter, setTocFilter] = useState("")
-  const tocFetchedRef = useRef(false)
-  const municodeUrl = "https://library.municode.com/fl/tampa/codes/code_of_ordinances"
 
   function renderFormattedChunk(text: string) {
     const lines = text.split("\n")
@@ -359,12 +351,6 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     return () => document.removeEventListener("mousedown", onDocClick)
   }, [])
 
-  useEffect(() => {
-    if (activeTab === "tampa-code" && !tocFetchedRef.current) {
-      tocFetchedRef.current = true
-      fetchToc()
-    }
-  }, [activeTab])
 
   function handleAddressChange(value: string) {
     setAddress(value)
@@ -475,51 +461,6 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     }
   }
 
-  async function fetchToc() {
-    setTocLoading(true)
-    try {
-      const res = await fetch(apiUrl("/api/toc"), { credentials: "include" })
-      if (!res.ok) {
-        console.error("TOC fetch failed:", res.status, await res.text().catch(() => ""))
-        return
-      }
-      const data = await res.json().catch((err: unknown) => {
-        console.error("TOC JSON parse failed:", err)
-        return null
-      })
-      if (Array.isArray(data)) setToc(data as TocChapter[])
-    } catch (err) {
-      console.error("TOC fetch error:", err)
-    } finally {
-      setTocLoading(false)
-    }
-  }
-
-  async function loadSection(rawSection: string) {
-    // Normalise any section/subsection string to its parent, e.g. "5-101.1." → "5-101."
-    const stripped = rawSection.replace(/\.$/, "")
-    const parent   = (stripped.includes(".") ? stripped.split(".")[0] : stripped) + "."
-    setActiveSection(parent)
-    const chMatch = parent.match(/^(\d+)-/)
-    if (chMatch) setExpandedChapters((prev) => new Set([...prev, chMatch[1]]))
-    setSectionLoading(true)
-    setSectionContent(null)
-    try {
-      const res = await fetch(apiUrl(`/api/section/${encodeURIComponent(parent)}`), { credentials: "include" })
-      if (!res.ok) return
-      setSectionContent((await res.json()) as SectionContent)
-    } finally {
-      setSectionLoading(false)
-    }
-  }
-
-  function toggleChapter(ch: string) {
-    setExpandedChapters((prev) => {
-      const next = new Set(prev)
-      next.has(ch) ? next.delete(ch) : next.add(ch)
-      return next
-    })
-  }
 
   async function loadPropertyContext() {
     const addr = address.trim()
@@ -908,7 +849,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                                     </p>
                                     {result.section && (
                                       <button
-                                        onClick={() => { loadSection(result.section!); setActiveTab("tampa-code") }}
+                                        onClick={() => setActiveTab("tampa-code")}
                                         className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline"
                                       >
                                         <BookOpen className="size-3 shrink-0" />
@@ -1412,174 +1353,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
           )}
 
           {/* ── Tampa Code ── */}
-          {activeTab === "tampa-code" && (() => {
-            const isFiltering = tocFilter.trim().length > 0
-            const filteredToc = isFiltering
-              ? toc
-                  .map((ch) => ({
-                    ...ch,
-                    sections: ch.sections.filter(
-                      (s) =>
-                        s.section_number.toLowerCase().includes(tocFilter.toLowerCase()) ||
-                        s.title.toLowerCase().includes(tocFilter.toLowerCase()),
-                    ),
-                  }))
-                  .filter((ch) => ch.sections.length > 0)
-              : toc
-
-            return (
-              <div className="h-full" style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)" }}>
-
-                {/* ── Sidebar ── */}
-                <div className="border-r border-border flex flex-col bg-card h-full overflow-hidden">
-                  <div className="px-3 py-3 border-b border-border space-y-2">
-                    <div className="flex items-center gap-2">
-                      <div className="size-7 rounded-md bg-primary/10 text-primary flex items-center justify-center">
-                        <Globe2 className="size-4" />
-                      </div>
-                      <div>
-                        <div className="text-[12px] font-semibold text-foreground">Municode Viewer</div>
-                        <div className="text-[11px] text-muted-foreground">Official Tampa code library</div>
-                      </div>
-                    </div>
-                    <a
-                      href={municodeUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 text-[11px] text-primary hover:underline"
-                    >
-                      Open full Municode site
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  </div>
-
-                  {/* Filter */}
-                  <div className="px-3 py-2.5 border-b border-border shrink-0">
-                    <div className="relative">
-                      <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                      <input
-                        value={tocFilter}
-                        onChange={(e) => setTocFilter(e.target.value)}
-                        placeholder="Filter sections…"
-                        className="w-full h-8 pl-8 pr-3 text-[13px] rounded-[7px] border bg-background text-foreground placeholder:text-muted-foreground outline-none transition-colors"
-                        style={{ borderColor: "var(--border)" }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Tree */}
-                  <div className="flex-1 overflow-y-auto scroll-zone py-1">
-                    {tocLoading && (
-                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">Loading…</div>
-                    )}
-                    {!tocLoading && toc.length === 0 && (
-                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">Could not load sections. Restart the backend and reload.</div>
-                    )}
-                    {!tocLoading && filteredToc.length === 0 && toc.length > 0 && (
-                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">No sections match.</div>
-                    )}
-                    {filteredToc.map((chapter) => {
-                      const isOpen = isFiltering || expandedChapters.has(chapter.chapter)
-                      return (
-                        <div key={chapter.chapter}>
-                          <button
-                            onClick={() => toggleChapter(chapter.chapter)}
-                            className="w-full flex items-center gap-1.5 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
-                          >
-                            <ChevronRight
-                              className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
-                            />
-                            <div className="min-w-0">
-                              <div className="text-[11.5px] font-semibold text-foreground leading-tight">
-                                Ch. {chapter.chapter}{chapter.chapter_name ? ` — ${chapter.chapter_name}` : ""}
-                              </div>
-                              <div className="text-[10px] text-muted-foreground font-mono truncate mt-0.5">{chapter.source_file}</div>
-                            </div>
-                          </button>
-
-                          {isOpen && (
-                            <div>
-                              {chapter.sections.map((section) => (
-                                <button
-                                  key={section.section_number}
-                                  onClick={() => loadSection(section.section_number)}
-                                  className="w-full text-left transition-colors hover:bg-muted/40"
-                                  style={{
-                                    background: activeSection === section.section_number ? "var(--primary-soft)" : undefined,
-                                    color: activeSection === section.section_number ? "var(--primary-soft-fg)" : undefined,
-                                  }}
-                                >
-                                  <div className="pl-7 pr-3 py-1.5">
-                                    <span className="font-mono text-[10.5px] mr-1.5 opacity-60">{section.section_number}</span>
-                                    <span className="text-[12px]">{section.title || "—"}</span>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-
-                {/* ── Content pane ── */}
-                <div className="h-full overflow-y-auto scroll-zone">
-                  {!activeSection && !sectionLoading && (
-                    <div className="flex items-center justify-center h-full">
-                      <div className="text-center">
-                        <BookOpen className="size-10 text-muted-foreground/30 mx-auto mb-3" />
-                        <div className="text-[14px] text-muted-foreground">Select a section from the sidebar to read the code</div>
-                      </div>
-                    </div>
-                  )}
-
-                  {sectionLoading && (
-                    <div className="px-10 py-8 max-w-[780px] space-y-3">
-                      {[90, 75, 85, 60, 95, 70].map((w, i) => (
-                        <div key={i} className="h-4 rounded stripe-placeholder" style={{ width: `${w}%` }} />
-                      ))}
-                    </div>
-                  )}
-
-                  {sectionContent && !sectionLoading && (
-                    <div className="px-10 py-7 max-w-[820px]">
-                      {/* Breadcrumb */}
-                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mb-1 flex-wrap">
-                        <span>Ch. {sectionContent.section_number.match(/^(\d+)/)?.[1]}</span>
-                        <ChevronRight className="size-3 shrink-0" />
-                        <span className="font-mono">{sectionContent.section_number}</span>
-                        {sectionContent.title && (
-                          <>
-                            <ChevronRight className="size-3 shrink-0" />
-                            <span>{sectionContent.title}</span>
-                          </>
-                        )}
-                      </div>
-                      <div className="text-[11.5px] text-muted-foreground mb-7">
-                        Page {sectionContent.page} · {sectionContent.source_file}
-                      </div>
-
-                      {/* Chunks */}
-                      <div className="space-y-7">
-                        {sectionContent.chunks.map((chunk, i) => (
-                          <div key={chunk.chunk_id || i}>
-                            {chunk.section !== activeSection && (
-                              <div className="font-mono text-[10.5px] text-muted-foreground mb-2 uppercase tracking-wider">
-                                {chunk.section}
-                              </div>
-                            )}
-                            {renderFormattedChunk(chunk.text)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-              </div>
-            )
-          })()}
+          {activeTab === "tampa-code" && <TampaCodeTocViewer />}
 
         </main>
       </div>

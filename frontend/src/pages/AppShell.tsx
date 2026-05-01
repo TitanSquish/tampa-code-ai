@@ -4,18 +4,23 @@ import { useEffect, useRef, useState } from "react"
 import { apiUrl } from "@/lib/api"
 import { applyTheme, readThemePreference, saveThemePreference, type Theme } from "@/lib/theme"
 import {
+  AlertCircle,
   BookOpen,
   Building2,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
   FileSearch,
+  FileText,
   LogOut,
   MapPin,
   MapPinned,
   Moon,
   Search,
   Sun,
+  XCircle,
 } from "lucide-react"
 
 const PERMIT_TYPE_OPTIONS: { value: string; label: string }[] = [
@@ -43,6 +48,98 @@ const PERMIT_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "Other", label: "Other" },
 ]
 
+type PermitLink = { title: string; url: string }
+
+const PERMIT_LINKS: Record<string, PermitLink[]> = {
+  "New single-family home": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Residential New Construction Checklist", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "New multi-family / apartments": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "New commercial building": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Addition (residential)": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Addition (commercial)": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Remodel / alteration (residential)": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Remodel / alteration (commercial)": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Accessory dwelling unit (ADU)": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Accessory Dwelling Unit Info — Tampa Gov", url: "https://www.tampagov.net/development-growth-management/accessory-dwelling-units" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Detached garage / accessory structure": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Fence or wall": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Pool or spa": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Deck or patio": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+    { title: "CSD Sufficiency Checklist (PDF)", url: "https://www.tampagov.net/sites/default/files/2025-11/csd-sufficiency-checklist.pdf" },
+  ],
+  "Roofing": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Mechanical / HVAC": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Electrical": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Plumbing": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Solar / PV": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Sign": [
+    { title: "Apply for a Sign Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Demolition": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+  "Change of use / occupancy": [
+    { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+    { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+  ],
+}
+
+const DEFAULT_PERMIT_LINKS: PermitLink[] = [
+  { title: "Apply for a Permit Online", url: "https://www.tampagov.net/online-permits" },
+  { title: "Building & Construction — Tampa Gov", url: "https://www.tampagov.net/building-and-construction" },
+]
+
 const SUGGESTED_QUESTIONS = [
   "What are the setback and height requirements for an ADU?",
   "How tall can a residential fence be in the front yard?",
@@ -64,7 +161,20 @@ type SearchResult = {
   chunk_id?: string
   page?: number | string
   source?: string
+  section?: string
   text?: string
+}
+
+type TocSubsection = { subsection_number: string; title: string; page: number }
+type TocSection    = { section_number: string; title: string; page: number; subsections: TocSubsection[] }
+type TocChapter    = { chapter: string; chapter_name: string; source_file: string; sections: TocSection[] }
+
+type SectionContent = {
+  section_number: string
+  title: string
+  page: number
+  source_file: string
+  chunks: { chunk_id: string; section: string; page: number; text: string }[]
 }
 
 type AddressRequirement = {
@@ -124,6 +234,15 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   const suppressNextFetchRef = useRef(false)
   const addressBoxRef = useRef<HTMLDivElement | null>(null)
 
+  const [toc, setToc] = useState<TocChapter[]>([])
+  const [tocLoading, setTocLoading] = useState(false)
+  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set())
+  const [activeSection, setActiveSection] = useState<string | null>(null)
+  const [sectionContent, setSectionContent] = useState<SectionContent | null>(null)
+  const [sectionLoading, setSectionLoading] = useState(false)
+  const [tocFilter, setTocFilter] = useState("")
+  const tocFetchedRef = useRef(false)
+
   // Keyboard shortcuts ⌘1/2/3
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -180,6 +299,13 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     document.addEventListener("mousedown", onDocClick)
     return () => document.removeEventListener("mousedown", onDocClick)
   }, [])
+
+  useEffect(() => {
+    if (activeTab === "tampa-code" && !tocFetchedRef.current) {
+      tocFetchedRef.current = true
+      fetchToc()
+    }
+  }, [activeTab])
 
   function handleAddressChange(value: string) {
     setAddress(value)
@@ -288,6 +414,52 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
     } finally {
       setSearchLoading(false)
     }
+  }
+
+  async function fetchToc() {
+    setTocLoading(true)
+    try {
+      const res = await fetch(apiUrl("/api/toc"), { credentials: "include" })
+      if (!res.ok) {
+        console.error("TOC fetch failed:", res.status, await res.text().catch(() => ""))
+        return
+      }
+      const data = await res.json().catch((err: unknown) => {
+        console.error("TOC JSON parse failed:", err)
+        return null
+      })
+      if (Array.isArray(data)) setToc(data as TocChapter[])
+    } catch (err) {
+      console.error("TOC fetch error:", err)
+    } finally {
+      setTocLoading(false)
+    }
+  }
+
+  async function loadSection(rawSection: string) {
+    // Normalise any section/subsection string to its parent, e.g. "5-101.1." → "5-101."
+    const stripped = rawSection.replace(/\.$/, "")
+    const parent   = (stripped.includes(".") ? stripped.split(".")[0] : stripped) + "."
+    setActiveSection(parent)
+    const chMatch = parent.match(/^(\d+)-/)
+    if (chMatch) setExpandedChapters((prev) => new Set([...prev, chMatch[1]]))
+    setSectionLoading(true)
+    setSectionContent(null)
+    try {
+      const res = await fetch(apiUrl(`/api/section/${encodeURIComponent(parent)}`), { credentials: "include" })
+      if (!res.ok) return
+      setSectionContent((await res.json()) as SectionContent)
+    } finally {
+      setSectionLoading(false)
+    }
+  }
+
+  function toggleChapter(ch: string) {
+    setExpandedChapters((prev) => {
+      const next = new Set(prev)
+      next.has(ch) ? next.delete(ch) : next.add(ch)
+      return next
+    })
   }
 
   async function loadPropertyContext() {
@@ -675,6 +847,15 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                                     <p className="text-[13px] leading-[1.55] text-muted-foreground line-clamp-4">
                                       {result.text ?? ""}
                                     </p>
+                                    {result.section && (
+                                      <button
+                                        onClick={() => { loadSection(result.section!); setActiveTab("tampa-code") }}
+                                        className="mt-2 inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline"
+                                      >
+                                        <BookOpen className="size-3 shrink-0" />
+                                        Open in code browser
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -965,59 +1146,158 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                       </div>
                     )}
 
-                    {/* Requirements table */}
-                    {reviewRequirements.length > 0 && (
-                      <div className="rounded-[12px] border border-border bg-card overflow-hidden">
-                        <div className="flex items-center justify-between px-5 py-2.5 border-b border-border">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                              Extracted requirements
-                            </span>
-                            <span className="inline-flex items-center justify-center size-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold">
-                              {reviewRequirements.length}
-                            </span>
+                    {/* Permit Required callout */}
+                    {(() => {
+                      const permitItem = reviewRequirements.find((r) => r.name === "Permit Required")
+                      if (!permitItem) return null
+                      const val = (permitItem.value ?? "").toLowerCase()
+                      const isNo = val.startsWith("no")
+                      const isLikely = val.startsWith("likely")
+                      return (
+                        <div className={`rounded-[12px] border px-5 py-4 flex gap-3 items-start ${
+                          isNo
+                            ? "border-emerald-500/30 bg-emerald-500/5"
+                            : isLikely
+                            ? "border-amber-500/30 bg-amber-500/5"
+                            : "border-primary/30 bg-primary/5"
+                        }`}>
+                          <div className="shrink-0 mt-0.5">
+                            {isNo
+                              ? <XCircle className="size-4 text-emerald-500" />
+                              : isLikely
+                              ? <AlertCircle className="size-4 text-amber-500" />
+                              : <CheckCircle2 className="size-4 text-primary" />
+                            }
+                          </div>
+                          <div className="min-w-0">
+                            <div className={`text-[12px] font-semibold uppercase tracking-[0.08em] mb-1 ${
+                              isNo ? "text-emerald-600 dark:text-emerald-400" : isLikely ? "text-amber-600 dark:text-amber-400" : "text-primary"
+                            }`}>
+                              {isNo ? "Permit Not Required" : isLikely ? "Permit Likely Required" : "Permit Required"}
+                            </div>
+                            <p className="text-[13.5px] leading-[1.55] text-foreground">{permitItem.value}</p>
+                            {permitItem.page && Number(permitItem.page) > 0 && (
+                              <span className="text-[11.5px] text-muted-foreground mt-1 block">Source: p.{permitItem.page}</span>
+                            )}
                           </div>
                         </div>
-                        <table className="w-full text-left text-[13.5px]">
-                          <thead>
-                            <tr className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/30">
-                              <th className="px-5 py-2 font-semibold">Requirement</th>
-                              <th className="px-5 py-2 font-semibold">Value</th>
-                              <th className="px-5 py-2 font-semibold">Page</th>
-                              <th className="px-5 py-2 font-semibold text-right">Note</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-border">
-                            {reviewRequirements.map((item, index) => (
-                              <tr key={`${item.name ?? "req"}-${index}`} className="align-middle" style={index % 2 ? { background: "var(--card-2)" } : {}}>
-                                <td className="px-5 py-2.5 font-medium text-foreground">{item.name ?? "Requirement"}</td>
-                                <td className="px-5 py-2.5">
-                                  <span className="font-mono text-[12.5px] text-foreground">{item.value ?? ""}</span>
-                                </td>
-                                <td className="px-5 py-2.5">
-                                  <span className="font-mono text-[11.5px] text-muted-foreground">
-                                    {item.page ? `p.${item.page}` : "—"}
-                                  </span>
-                                </td>
-                                <td className="px-5 py-2.5 text-right">
-                                  {item.severity === "alert" && (
-                                    <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium bg-destructive/10 text-destructive">
-                                      Review required
-                                    </span>
-                                  )}
-                                  {item.severity === "watch" && (
-                                    <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium text-[var(--accent-warm-fg)]" style={{ background: "var(--accent-warm-soft)" }}>
-                                      Verify
-                                    </span>
-                                  )}
-                                  {(!item.severity || item.severity === "standard") && (
-                                    <span className="text-muted-foreground">—</span>
-                                  )}
-                                </td>
-                              </tr>
+                      )
+                    })()}
+
+                    {/* Required Documents card */}
+                    {(() => {
+                      const docsItem = reviewRequirements.find((r) => r.name === "Required Documents")
+                      if (!docsItem) return null
+                      const docs = (docsItem.value ?? "").split(",").map((d) => d.trim()).filter(Boolean)
+                      return (
+                        <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                          <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border">
+                            <FileText className="size-3.5 text-muted-foreground" />
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                              Required Documents
+                            </span>
+                            {docsItem.page && Number(docsItem.page) > 0 && (
+                              <span className="text-[11px] text-muted-foreground ml-auto">p.{docsItem.page}</span>
+                            )}
+                          </div>
+                          <ul className="divide-y divide-border">
+                            {docs.map((doc, i) => (
+                              <li key={i} className="px-5 py-2.5 flex items-center gap-2.5 text-[13.5px] text-foreground">
+                                <span className="size-1.5 rounded-full bg-primary/50 shrink-0" />
+                                {doc}
+                              </li>
                             ))}
-                          </tbody>
-                        </table>
+                          </ul>
+                        </div>
+                      )
+                    })()}
+
+                    {/* Requirements table */}
+                    {(() => {
+                      const codeReqs = reviewRequirements.filter(
+                        (r) => r.name !== "Permit Required" && r.name !== "Required Documents"
+                      )
+                      if (codeReqs.length === 0) return null
+                      return (
+                        <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                          <div className="flex items-center justify-between px-5 py-2.5 border-b border-border">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                                Code requirements
+                              </span>
+                              <span className="inline-flex items-center justify-center size-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold">
+                                {codeReqs.length}
+                              </span>
+                            </div>
+                          </div>
+                          <table className="w-full text-left text-[13.5px]">
+                            <thead>
+                              <tr className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground border-b border-border bg-muted/30">
+                                <th className="px-5 py-2 font-semibold">Requirement</th>
+                                <th className="px-5 py-2 font-semibold">Value</th>
+                                <th className="px-5 py-2 font-semibold">Page</th>
+                                <th className="px-5 py-2 font-semibold text-right">Note</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                              {codeReqs.map((item, index) => (
+                                <tr key={`${item.name ?? "req"}-${index}`} className="align-middle" style={index % 2 ? { background: "var(--card-2)" } : {}}>
+                                  <td className="px-5 py-2.5 font-medium text-foreground">{item.name ?? "Requirement"}</td>
+                                  <td className="px-5 py-2.5">
+                                    <span className="font-mono text-[12.5px] text-foreground">{item.value ?? ""}</span>
+                                  </td>
+                                  <td className="px-5 py-2.5">
+                                    <span className="font-mono text-[11.5px] text-muted-foreground">
+                                      {item.page ? `p.${item.page}` : "—"}
+                                    </span>
+                                  </td>
+                                  <td className="px-5 py-2.5 text-right">
+                                    {item.severity === "alert" && (
+                                      <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium bg-destructive/10 text-destructive">
+                                        Review required
+                                      </span>
+                                    )}
+                                    {item.severity === "watch" && (
+                                      <span className="inline-flex items-center rounded-full px-2 py-[1px] text-[11px] font-medium text-[var(--accent-warm-fg)]" style={{ background: "var(--accent-warm-soft)" }}>
+                                        Verify
+                                      </span>
+                                    )}
+                                    {(!item.severity || item.severity === "standard") && (
+                                      <span className="text-muted-foreground">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    })()}
+
+                    {/* City Resources */}
+                    {permitType && reviewRequirements.length > 0 && !reviewLoading && (
+                      <div className="rounded-[12px] border border-border bg-card overflow-hidden">
+                        <div className="flex items-center gap-2 px-5 py-2.5 border-b border-border">
+                          <Building2 className="size-3.5 text-muted-foreground" />
+                          <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            City of Tampa resources
+                          </span>
+                        </div>
+                        <ul className="divide-y divide-border">
+                          {(PERMIT_LINKS[permitType] ?? DEFAULT_PERMIT_LINKS).map((link, i) => (
+                            <li key={i}>
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-5 py-2.5 flex items-center gap-2.5 text-[13.5px] text-primary hover:underline"
+                              >
+                                <ExternalLink className="size-3.5 shrink-0" />
+                                {link.title}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
 
@@ -1073,47 +1353,155 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
           )}
 
           {/* ── Tampa Code ── */}
-          {activeTab === "tampa-code" && (
-            <div className="h-full" style={{ display: "grid", gridTemplateColumns: "280px 1fr" }}>
-              {/* Document list */}
-              <div className="border-r border-border flex flex-col bg-card">
-                <div className="px-5 py-4 border-b border-border">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                    Source documents
-                  </div>
-                  <div className="text-[13.5px] mt-0.5 text-foreground">3 PDFs · indexed April 2026</div>
-                </div>
-                <div className="p-2 space-y-1">
-                  {[
-                    { id: "pdf1" as const, label: "tampa-code-5-27.pdf", sub: "Primary — Tampa Code of Ordinances" },
-                    { id: "pdf2" as const, label: "tampa-code-22-11.pdf", sub: "Supplementary — Amendments" },
-                  ].map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => setActivePdf(p.id)}
-                      className="w-full text-left rounded-[9px] border px-3 py-2.5 transition-colors"
-                      style={{
-                        background: activePdf === p.id ? "var(--primary-soft)" : "transparent",
-                        borderColor: activePdf === p.id ? "transparent" : "var(--border)",
-                        color: activePdf === p.id ? "var(--primary-soft-fg)" : "var(--foreground)",
-                      }}
-                    >
-                      <div className="text-[13px] font-medium font-mono">{p.label}</div>
-                      <div className="text-[11.5px] mt-0.5 text-muted-foreground">{p.sub}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
+          {activeTab === "tampa-code" && (() => {
+            const isFiltering = tocFilter.trim().length > 0
+            const filteredToc = isFiltering
+              ? toc
+                  .map((ch) => ({
+                    ...ch,
+                    sections: ch.sections.filter(
+                      (s) =>
+                        s.section_number.toLowerCase().includes(tocFilter.toLowerCase()) ||
+                        s.title.toLowerCase().includes(tocFilter.toLowerCase()),
+                    ),
+                  }))
+                  .filter((ch) => ch.sections.length > 0)
+              : toc
 
-              {/* PDF viewer */}
-              <iframe
-                key={activePdf}
-                src={apiUrl(activePdf === "pdf1" ? "/pdf" : "/pdf2")}
-                title="Tampa Code of Ordinances"
-                className="w-full h-full border-0 block"
-              />
-            </div>
-          )}
+            return (
+              <div className="h-full" style={{ display: "grid", gridTemplateColumns: "220px 1fr" }}>
+
+                {/* ── Sidebar ── */}
+                <div className="border-r border-border flex flex-col bg-card h-full overflow-hidden">
+                  {/* Filter */}
+                  <div className="px-3 py-2.5 border-b border-border shrink-0">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                      <input
+                        value={tocFilter}
+                        onChange={(e) => setTocFilter(e.target.value)}
+                        placeholder="Filter sections…"
+                        className="w-full h-8 pl-8 pr-3 text-[13px] rounded-[7px] border bg-background text-foreground placeholder:text-muted-foreground outline-none transition-colors"
+                        style={{ borderColor: "var(--border)" }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tree */}
+                  <div className="flex-1 overflow-y-auto scroll-zone py-1">
+                    {tocLoading && (
+                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">Loading…</div>
+                    )}
+                    {!tocLoading && toc.length === 0 && (
+                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">Could not load sections. Restart the backend and reload.</div>
+                    )}
+                    {!tocLoading && filteredToc.length === 0 && toc.length > 0 && (
+                      <div className="px-4 py-3 text-[12.5px] text-muted-foreground">No sections match.</div>
+                    )}
+                    {filteredToc.map((chapter) => {
+                      const isOpen = isFiltering || expandedChapters.has(chapter.chapter)
+                      return (
+                        <div key={chapter.chapter}>
+                          <button
+                            onClick={() => toggleChapter(chapter.chapter)}
+                            className="w-full flex items-center gap-1.5 px-3 py-2 text-left hover:bg-muted/40 transition-colors"
+                          >
+                            <ChevronRight
+                              className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
+                            />
+                            <div className="min-w-0">
+                              <div className="text-[11.5px] font-semibold text-foreground leading-tight">
+                                Ch. {chapter.chapter}{chapter.chapter_name ? ` — ${chapter.chapter_name}` : ""}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground font-mono truncate mt-0.5">{chapter.source_file}</div>
+                            </div>
+                          </button>
+
+                          {isOpen && (
+                            <div>
+                              {chapter.sections.map((section) => (
+                                <button
+                                  key={section.section_number}
+                                  onClick={() => loadSection(section.section_number)}
+                                  className="w-full text-left transition-colors hover:bg-muted/40"
+                                  style={{
+                                    background: activeSection === section.section_number ? "var(--primary-soft)" : undefined,
+                                    color: activeSection === section.section_number ? "var(--primary-soft-fg)" : undefined,
+                                  }}
+                                >
+                                  <div className="pl-7 pr-3 py-1.5">
+                                    <span className="font-mono text-[10.5px] mr-1.5 opacity-60">{section.section_number}</span>
+                                    <span className="text-[12px]">{section.title || "—"}</span>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Content pane ── */}
+                <div className="h-full overflow-y-auto scroll-zone">
+                  {!activeSection && !sectionLoading && (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center">
+                        <BookOpen className="size-10 text-muted-foreground/30 mx-auto mb-3" />
+                        <div className="text-[14px] text-muted-foreground">Select a section from the sidebar to read the code</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {sectionLoading && (
+                    <div className="px-10 py-8 max-w-[780px] space-y-3">
+                      {[90, 75, 85, 60, 95, 70].map((w, i) => (
+                        <div key={i} className="h-4 rounded stripe-placeholder" style={{ width: `${w}%` }} />
+                      ))}
+                    </div>
+                  )}
+
+                  {sectionContent && !sectionLoading && (
+                    <div className="px-10 py-7 max-w-[820px]">
+                      {/* Breadcrumb */}
+                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mb-1 flex-wrap">
+                        <span>Ch. {sectionContent.section_number.match(/^(\d+)/)?.[1]}</span>
+                        <ChevronRight className="size-3 shrink-0" />
+                        <span className="font-mono">{sectionContent.section_number}</span>
+                        {sectionContent.title && (
+                          <>
+                            <ChevronRight className="size-3 shrink-0" />
+                            <span>{sectionContent.title}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-[11.5px] text-muted-foreground mb-7">
+                        Page {sectionContent.page} · {sectionContent.source_file}
+                      </div>
+
+                      {/* Chunks */}
+                      <div className="space-y-7">
+                        {sectionContent.chunks.map((chunk, i) => (
+                          <div key={chunk.chunk_id || i}>
+                            {chunk.section !== activeSection && (
+                              <div className="font-mono text-[10.5px] text-muted-foreground mb-2 uppercase tracking-wider">
+                                {chunk.section}
+                              </div>
+                            )}
+                            <p className="text-[14px] leading-[1.7] text-foreground whitespace-pre-wrap">
+                              {chunk.text}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            )
+          })()}
 
         </main>
       </div>

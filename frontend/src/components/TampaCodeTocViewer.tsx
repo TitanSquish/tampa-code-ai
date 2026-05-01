@@ -1,61 +1,111 @@
-import { ExternalLink, Search } from "lucide-react"
-import { useMemo, useState } from "react"
-import tocData from "@/data/tampaCodeToc.json"
+import { ChevronDown, ChevronRight, ExternalLink, FileText, Search } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { apiUrl } from "@/lib/api"
 
-export type TampaCodeTocNode = {
-  id: string
-  level: "chapter" | "article" | "division" | "section" | "other"
-  label: string
+type TocSubsection = { subsection_number: string; title: string; page: number }
+type TocSection = { section_number: string; title: string; page: number; subsections: TocSubsection[] }
+type TocChapter = { chapter: string; chapter_name: string; source_file: string; sections: TocSection[] }
+
+type SectionContent = {
+  section_number: string
   title: string
-  page?: number | null
-  children?: TampaCodeTocNode[]
+  page: number
+  source_file: string
+  chunks: { chunk_id: string; section: string; page: number; text: string }[]
 }
 
 const municodeUrl = "https://library.municode.com/fl/tampa/codes/code_of_ordinances"
 
-function flatten(nodes: TampaCodeTocNode[]): TampaCodeTocNode[] {
-  return nodes.flatMap((n) => [n, ...flatten(n.children ?? [])])
+function sortByPage<T extends { page?: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => (a.page || Number.MAX_SAFE_INTEGER) - (b.page || Number.MAX_SAFE_INTEGER))
 }
 
 export default function TampaCodeTocViewer() {
-  const toc = tocData as TampaCodeTocNode[]
   const [query, setQuery] = useState("")
-  const [selectedId, setSelectedId] = useState<string | null>(toc[0]?.id ?? null)
+  const [toc, setToc] = useState<TocChapter[]>([])
+  const [loadingToc, setLoadingToc] = useState(true)
+  const [tocError, setTocError] = useState("")
 
-  const flat = useMemo(() => flatten(toc), [toc])
-  const selected = flat.find((n) => n.id === selectedId) ?? null
+  const [openChapters, setOpenChapters] = useState<Record<string, boolean>>({})
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
 
-  const q = query.trim().toLowerCase()
-  const filtered = useMemo(() => {
-    if (!q) return toc
-    const keep = (node: TampaCodeTocNode): TampaCodeTocNode | null => {
-      const kids = (node.children ?? []).map(keep).filter(Boolean) as TampaCodeTocNode[]
-      const hit = [node.label, node.title, node.level].some((v) => v.toLowerCase().includes(q))
-      return hit || kids.length ? { ...node, children: kids } : null
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null)
+  const [sectionContent, setSectionContent] = useState<SectionContent | null>(null)
+  const [sectionLoading, setSectionLoading] = useState(false)
+  const [sectionError, setSectionError] = useState("")
+
+  useEffect(() => {
+    let ignore = false
+    async function load() {
+      setLoadingToc(true)
+      setTocError("")
+      try {
+        const res = await fetch(apiUrl("/api/toc"), { credentials: "include" })
+        if (!res.ok) throw new Error(`Failed to load TOC (${res.status})`)
+        const data = (await res.json()) as TocChapter[]
+        if (ignore) return
+        setToc(data)
+        const chapterState: Record<string, boolean> = {}
+        data.forEach((chapter, idx) => {
+          chapterState[chapter.chapter] = idx < 2
+        })
+        setOpenChapters(chapterState)
+      } catch (error) {
+        if (!ignore) setTocError(error instanceof Error ? error.message : "Unable to load Tampa code TOC")
+      } finally {
+        if (!ignore) setLoadingToc(false)
+      }
     }
-    return toc.map(keep).filter(Boolean) as TampaCodeTocNode[]
-  }, [q, toc])
+    load()
+    return () => {
+      ignore = true
+    }
+  }, [])
 
-  const NodeRow = ({ node, depth }: { node: TampaCodeTocNode; depth: number }) => (
-    <>
-      <button
-        onClick={() => setSelectedId(node.id)}
-        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 ${selectedId === node.id ? "bg-primary/10 text-primary" : ""}`}
-        style={{ paddingLeft: `${12 + depth * 14}px` }}
-      >
-        <span className="font-medium">{node.label}</span>
-        {node.title ? <span className="text-muted-foreground"> — {node.title}</span> : null}
-      </button>
-      {(node.children ?? []).map((child) => <NodeRow key={child.id} node={child} depth={depth + 1} />)}
-    </>
-  )
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return toc
+    return toc
+      .map((chapter) => {
+        const chapterMatch = `${chapter.chapter} ${chapter.chapter_name}`.toLowerCase().includes(q)
+        const filteredSections = chapter.sections
+          .map((section) => {
+            const sectionHit = `${section.section_number} ${section.title}`.toLowerCase().includes(q)
+            const subs = section.subsections.filter((sub) => `${sub.subsection_number} ${sub.title}`.toLowerCase().includes(q))
+            if (sectionHit || subs.length || chapterMatch) return { ...section, subsections: subs.length || sectionHit || chapterMatch ? section.subsections : subs }
+            return null
+          })
+          .filter(Boolean) as TocSection[]
+
+        if (chapterMatch || filteredSections.length) return { ...chapter, sections: filteredSections }
+        return null
+      })
+      .filter(Boolean) as TocChapter[]
+  }, [query, toc])
+
+  async function loadSection(sectionNumber: string) {
+    const key = sectionNumber.replace(/\.$/, "")
+    setSelectedSectionId(key)
+    setSectionError("")
+    setSectionLoading(true)
+    try {
+      const res = await fetch(apiUrl(`/api/section/${encodeURIComponent(key)}`), { credentials: "include" })
+      if (!res.ok) throw new Error(`Failed to load section (${res.status})`)
+      setSectionContent((await res.json()) as SectionContent)
+    } catch (error) {
+      setSectionContent(null)
+      setSectionError(error instanceof Error ? error.message : "Unable to load section text")
+    } finally {
+      setSectionLoading(false)
+    }
+  }
 
   return (
-    <div className="h-full grid grid-cols-1 md:grid-cols-[320px_minmax(0,1fr)]">
-      <aside className="border-r border-border bg-card h-full overflow-y-auto md:sticky md:top-0">
+    <div className="h-full grid grid-cols-1 md:grid-cols-[430px_minmax(0,1fr)]">
+      <aside className="border-r border-border bg-card h-full overflow-y-auto">
         <div className="p-3 border-b border-border">
-          <h2 className="text-sm font-semibold">Tampa Code References</h2>
-          <p className="text-xs text-muted-foreground mt-1">Only chapters and sections included in PermitIQ&apos;s curated Tampa Code TOC are shown.</p>
+          <h2 className="text-sm font-semibold">Tampa Code</h2>
+          <p className="text-xs text-muted-foreground mt-1">Browse by chapter → section → subsection and open full extracted section text.</p>
           <a href={municodeUrl} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline">
             Open official Tampa Municode <ExternalLink className="size-3" />
           </a>
@@ -64,28 +114,95 @@ export default function TampaCodeTocViewer() {
           <Search className="size-3.5 text-muted-foreground absolute left-5 top-1/2 -translate-y-1/2" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chapters, sections..." className="w-full h-8 pl-8 pr-2 text-xs rounded border bg-background" />
         </div>
-        <div className="py-2">
-          {filtered.map((n) => <NodeRow key={n.id} node={n} depth={0} />)}
+
+        {loadingToc ? <p className="p-3 text-xs text-muted-foreground">Loading Tampa code table of contents…</p> : null}
+        {tocError ? <p className="p-3 text-xs text-destructive">{tocError}</p> : null}
+
+        <div className="py-1">
+          {filtered.map((chapter) => {
+            const chapterOpen = !!openChapters[chapter.chapter]
+            return (
+              <div key={chapter.chapter}>
+                <button
+                  onClick={() => setOpenChapters((prev) => ({ ...prev, [chapter.chapter]: !chapterOpen }))}
+                  className="w-full text-left px-3 py-2 hover:bg-muted/40 text-sm font-medium flex items-center gap-2"
+                >
+                  {chapterOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+                  <span>Chapter {chapter.chapter}{chapter.chapter_name ? ` - ${chapter.chapter_name}` : ""}</span>
+                </button>
+
+                {chapterOpen && (
+                  <div>
+                    {sortByPage(chapter.sections).map((section) => {
+                      const sectionKey = `${chapter.chapter}:${section.section_number}`
+                      const sectionOpen = !!openSections[sectionKey]
+                      return (
+                        <div key={sectionKey}>
+                          <button
+                            onClick={() => {
+                              setOpenSections((prev) => ({ ...prev, [sectionKey]: !sectionOpen }))
+                              void loadSection(section.section_number)
+                            }}
+                            className={`w-full text-left pl-8 pr-3 py-1.5 text-sm hover:bg-muted/40 flex items-center gap-2 ${selectedSectionId === section.section_number.replace(/\.$/, "") ? "bg-primary/10 text-primary" : ""}`}
+                          >
+                            {sectionOpen ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                            <span className="font-medium">SECTION {section.section_number}</span>
+                            {section.title ? <span className="text-muted-foreground"> - {section.title}</span> : null}
+                          </button>
+
+                          {sectionOpen && section.subsections.length > 0 && (
+                            <div className="pb-1">
+                              {sortByPage(section.subsections).map((sub) => (
+                                <button
+                                  key={`${sectionKey}:${sub.subsection_number}`}
+                                  onClick={() => void loadSection(sub.subsection_number)}
+                                  className={`block w-full text-left pl-14 pr-3 py-1.5 text-sm hover:bg-muted/30 ${selectedSectionId === sub.subsection_number.replace(/\.$/, "") ? "bg-primary/10 text-primary" : ""}`}
+                                >
+                                  <span>{sub.subsection_number}</span>
+                                  {sub.title ? <span className="text-muted-foreground"> - {sub.title}</span> : null}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       </aside>
+
       <main className="overflow-y-auto p-5">
-        {selected ? (
-          <div className="space-y-3 max-w-3xl">
-            <h3 className="text-lg font-semibold">{selected.label}</h3>
-            <p className="text-sm text-muted-foreground">{selected.title}</p>
-            <div className="text-xs text-muted-foreground">Level: <span className="font-medium text-foreground">{selected.level}</span></div>
-            <div className="text-xs text-muted-foreground">TOC page: <span className="font-medium text-foreground">{selected.page ?? "N/A"}</span></div>
-            {!!selected.children?.length && (
-              <div>
-                <h4 className="text-sm font-semibold mb-1">Child sections</h4>
-                <ul className="space-y-1 text-sm">
-                  {selected.children.map((c) => <li key={c.id}><button onClick={() => setSelectedId(c.id)} className="text-left hover:underline">{c.label} — {c.title}</button></li>)}
-                </ul>
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground border-t pt-3">This is a curated table-of-contents reference. Verify the full legal text against the official Municode source.</p>
+        {sectionLoading && <p className="text-sm text-muted-foreground">Loading section text…</p>}
+        {sectionError && <p className="text-sm text-destructive">{sectionError}</p>}
+
+        {!sectionLoading && !sectionError && !sectionContent && (
+          <p className="text-sm text-muted-foreground">Select a chapter/section on the left to view extracted code text from the Tampa code PDFs.</p>
+        )}
+
+        {sectionContent && !sectionLoading && (
+          <div className="space-y-4 max-w-4xl">
+            <div>
+              <h3 className="text-lg font-semibold">Sec. {sectionContent.section_number}</h3>
+              <p className="text-sm text-muted-foreground">{sectionContent.title || "Section text"}</p>
+              <p className="text-xs text-muted-foreground mt-1">Source PDF: {sectionContent.source_file} · starting near page {sectionContent.page || "N/A"}</p>
+            </div>
+
+            {sectionContent.chunks.map((chunk) => (
+              <article key={chunk.chunk_id} className="rounded-md border bg-card p-4">
+                <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <FileText className="size-3.5" />
+                  <span>{chunk.section}</span>
+                  <span>• page {chunk.page || "N/A"}</span>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm leading-relaxed font-sans">{chunk.text}</pre>
+              </article>
+            ))}
           </div>
-        ) : <p className="text-sm text-muted-foreground">Select an item from the table of contents.</p>}
+        )}
       </main>
     </div>
   )

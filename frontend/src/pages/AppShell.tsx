@@ -14,6 +14,7 @@ import {
   ExternalLink,
   FileSearch,
   FileText,
+  Globe2,
   LogOut,
   MapPin,
   MapPinned,
@@ -242,6 +243,64 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
   const [sectionLoading, setSectionLoading] = useState(false)
   const [tocFilter, setTocFilter] = useState("")
   const tocFetchedRef = useRef(false)
+  const municodeUrl = "https://library.municode.com/fl/tampa/codes/code_of_ordinances"
+
+  function renderFormattedChunk(text: string) {
+    const lines = text.split("\n")
+    return (
+      <div className="space-y-2.5 text-[16px] leading-[1.9] text-foreground">
+        {lines.map((line, idx) => {
+          const trimmed = line.trim()
+          if (!trimmed) return <div key={idx} className="h-3" />
+
+          const headerMatch = trimmed.match(/^(Sec\.\s+[\dA-Za-z\-.]+)\s*-\s*(.+)$/)
+          if (headerMatch) {
+            return (
+              <h2 key={idx} className="text-[38px] leading-[1.2] font-semibold tracking-[-0.01em] text-foreground mb-6">
+                <span>{headerMatch[1]}</span>
+                <span className="font-normal"> - {headerMatch[2]}</span>
+              </h2>
+            )
+          }
+
+          const subHeaderMatch = trimmed.match(/^(\d+-\d+(?:\.\d+)+\.?)\s*(.*)$/)
+          if (subHeaderMatch) {
+            return (
+              <p key={idx} className="italic text-[35px] leading-[1.35] text-foreground/90 mb-4">
+                {subHeaderMatch[1]} {subHeaderMatch[2]}
+              </p>
+            )
+          }
+
+          const listMatch = trimmed.match(/^(\d+\.)\s+(.*)$/)
+          if (listMatch) {
+            return (
+              <p key={idx} className="pl-4">
+                <span className="inline-block w-10">{listMatch[1]}</span>
+                <span>{listMatch[2]}</span>
+              </p>
+            )
+          }
+
+          const ordMatch = trimmed.match(/^\(Ord\..+\)$/)
+          if (ordMatch) {
+            return <p key={idx} className="mt-5 text-foreground/85">{trimmed}</p>
+          }
+
+          const boldLeadMatch = line.match(/^([A-Za-z][^:]{3,80}:)\s*(.*)$/)
+          if (boldLeadMatch) {
+            return (
+              <p key={idx}>
+                <strong>{boldLeadMatch[1]}</strong> {boldLeadMatch[2]}
+              </p>
+            )
+          }
+
+          return <p key={idx}>{trimmed}</p>
+        })}
+      </div>
+    )
+  }
 
   // Keyboard shortcuts ⌘1/2/3
   useEffect(() => {
@@ -1369,10 +1428,31 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
               : toc
 
             return (
-              <div className="h-full" style={{ display: "grid", gridTemplateColumns: "220px 1fr" }}>
+              <div className="h-full" style={{ display: "grid", gridTemplateColumns: "260px minmax(0, 1fr)" }}>
 
                 {/* ── Sidebar ── */}
                 <div className="border-r border-border flex flex-col bg-card h-full overflow-hidden">
+                  <div className="px-3 py-3 border-b border-border space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="size-7 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+                        <Globe2 className="size-4" />
+                      </div>
+                      <div>
+                        <div className="text-[12px] font-semibold text-foreground">Municode Viewer</div>
+                        <div className="text-[11px] text-muted-foreground">Official Tampa code library</div>
+                      </div>
+                    </div>
+                    <a
+                      href={municodeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 text-[11px] text-primary hover:underline"
+                    >
+                      Open full Municode site
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </div>
+
                   {/* Filter */}
                   <div className="px-3 py-2.5 border-b border-border shrink-0">
                     <div className="relative">
@@ -1489,9 +1569,7 @@ export default function AppShell({ onSignedOut }: AppShellProps) {
                                 {chunk.section}
                               </div>
                             )}
-                            <p className="text-[14px] leading-[1.7] text-foreground whitespace-pre-wrap">
-                              {chunk.text}
-                            </p>
+                            {renderFormattedChunk(chunk.text)}
                           </div>
                         ))}
                       </div>
